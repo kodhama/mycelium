@@ -1,0 +1,2 @@
+# Every Trellis rule applies. To switch one off, add a row: <slug> = { active = false }
+[rules]
