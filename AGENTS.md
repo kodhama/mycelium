@@ -22,7 +22,7 @@ hand-back that it was unavailable and that step did not run.
 (hook-driven); `.trellis/rules.toml` selects which are active, and its rows
 govern. The rules live in the plugin, not here.
 
-**Write for a reader with ADD.** Applies to anything the maintainer reads:
+**Write for a reader who skims.** Applies to anything the maintainer reads:
 chat, reports, PRs, issues and comments.
 
 - First line = the point, and what the maintainer needs to do (if anything).
