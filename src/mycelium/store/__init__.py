@@ -11,7 +11,9 @@ from mycelium.store.sqlite import SCHEMA_VERSION, SqliteStore
 
 def open_store(path: Path) -> Store:
     """Open the store at `path`, creating its folders and file (owner-only) and its
-    schema if needed. Raises StoreRefused rather than misread or follow a symlink."""
+    schema if needed, even when the caller only reads (KTD13): where a read must
+    create nothing, check that `path` exists first. Raises StoreRefused rather
+    than misread a newer file or follow a symlink found as it opens."""
     return SqliteStore(path)
 
 

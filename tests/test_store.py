@@ -5,6 +5,7 @@ import sqlite3
 import threading
 import time
 from contextlib import closing
+from pathlib import Path
 
 import pytest
 
@@ -168,19 +169,21 @@ def test_twenty_concurrent_posters_lose_and_duplicate_nothing(tmp_path):
     assert sorted(bodies) == sorted(f"{p}:{i}" for p in range(20) for i in range(10))
 
 
-def _post_forever(path, ready):
+def _post_forever(path, ready, acknowledged):
     store = open_store(path)
     ready.set()
     i = 0
     while True:
         store.append("role-01", f"body-{i}-" + "x" * 512)
         i += 1
+        acknowledged.value = i
 
 
-def test_a_killed_writer_leaves_every_message_whole(tmp_path):
+def test_a_killed_writer_loses_no_acknowledged_message(tmp_path):
     path = tmp_path / "store.sqlite3"
     ready = CTX.Event()
-    writer = CTX.Process(target=_post_forever, args=(path, ready), daemon=True)
+    acknowledged = CTX.Value("q", 0)
+    writer = CTX.Process(target=_post_forever, args=(path, ready, acknowledged), daemon=True)
     writer.start()
     try:
         assert ready.wait(30)
@@ -194,7 +197,8 @@ def test_a_killed_writer_leaves_every_message_whole(tmp_path):
     with closing(sqlite3.connect(path)) as raw:
         assert raw.execute("PRAGMA integrity_check").fetchone() == ("ok",)
     messages = open_store(path).read("role-01", after=0)
-    assert messages
+    assert acknowledged.value > 0
+    assert len(messages) >= acknowledged.value
     for n, message in enumerate(messages):
         assert message.body == f"body-{n}-" + "x" * 512
 
@@ -219,6 +223,50 @@ def test_opening_a_current_store_does_not_wait_for_a_writer(tmp_path):
         writer.close()
 
 
+def _try_to_write(path, results):
+    with closing(sqlite3.connect(path, timeout=0, isolation_level=None)) as other:
+        try:
+            other.execute("BEGIN IMMEDIATE")
+            results.put("acquired")
+        except sqlite3.OperationalError:
+            results.put("blocked")
+
+
+def test_opening_the_store_keeps_this_processs_write_lock(tmp_path):
+    # Closing any descriptor on a database file drops every POSIX lock this
+    # process holds on it (sqlite.org/howtocorrupt.html, section 2.2).
+    path = tmp_path / "store.sqlite3"
+    open_store(path).close()
+    holder = sqlite3.connect(path, isolation_level=None)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        open_store(path).close()
+        results = CTX.Queue()
+        other = CTX.Process(target=_try_to_write, args=(path, results), daemon=True)
+        other.start()
+        other.join(30)
+        assert results.get(timeout=5) == "blocked"
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+def _crash_after_writing(path, statements):
+    # Exit without closing, so the WAL stays as a crash leaves it.
+    raw = sqlite3.connect(path, isolation_level=None)
+    for statement in statements:
+        raw.execute(statement)
+    os._exit(0)
+
+
+def _crash_leaving_a_wal(path, *statements):
+    crasher = CTX.Process(target=_crash_after_writing, args=(path, statements))
+    crasher.start()
+    crasher.join(30)
+    assert crasher.exitcode == 0
+    assert path.with_name(path.name + "-wal").stat().st_size > 0
+
+
 def test_a_store_from_a_newer_mycelium_is_refused_and_left_as_it_was(tmp_path):
     # An older mycelium reading a newer file would misread it; it says so instead.
     path = tmp_path / "store.sqlite3"
@@ -231,12 +279,30 @@ def test_a_store_from_a_newer_mycelium_is_refused_and_left_as_it_was(tmp_path):
     assert _snapshot(path) == before
 
 
+def test_a_newer_store_with_a_crash_wal_is_refused_and_its_wal_kept(tmp_path):
+    path = tmp_path / "store.sqlite3"
+    open_store(path).close()
+    _crash_leaving_a_wal(
+        path,
+        f"PRAGMA user_version={SCHEMA_VERSION + 1}",
+        "INSERT INTO messages (role, body, created_at) VALUES ('role-01', 'kept', 'now')",
+    )
+    before = _snapshot(path)
+    with pytest.raises(StoreRefused, match="newer"):
+        open_store(path)
+    assert _snapshot(path) == before
+
+
 def _snapshot(path):
-    """Every file of the store, so a write that went only to the WAL shows too."""
+    """The store's data, the WAL included, so a write that went only there shows
+    too. It leaves out -shm, the index SQLite rebuilds from the WAL, and an empty
+    -wal, which a read-only connection may add beside a clean file."""
     return {
         sibling.name: sibling.read_bytes()
         for sibling in path.parent.iterdir()
         if sibling.name.startswith(path.name)
+        and not sibling.name.endswith("-shm")
+        and sibling.stat().st_size > 0
     }
 
 
@@ -262,6 +328,20 @@ def test_a_symlinked_store_file_is_refused(tmp_path):
     (tmp_path / "store.sqlite3").symlink_to(elsewhere)
     with pytest.raises(StoreRefused, match="symlink"):
         open_store(tmp_path / "store.sqlite3")
+
+
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_a_symlinked_wal_or_shm_file_is_refused(tmp_path, suffix):
+    path = tmp_path / "store.sqlite3"
+    open_store(path).close()
+    target = tmp_path / "elsewhere"
+    target.write_bytes(b"not sqlite")
+    target.chmod(0o644)
+    path.with_name(path.name + suffix).symlink_to(target)
+    with pytest.raises(StoreRefused, match="symlink"):
+        open_store(path)
+    assert target.read_bytes() == b"not sqlite"
+    assert target.stat().st_mode & 0o777 == 0o644
 
 
 def test_a_symlinked_store_folder_is_refused(tmp_path):
@@ -315,3 +395,76 @@ def test_a_dangling_symlink_folder_is_refused(tmp_path):
     (tmp_path / "gone").symlink_to(tmp_path / "missing")
     with pytest.raises(StoreRefused, match="symlink"):
         open_store(tmp_path / "gone" / "store.sqlite3")
+
+
+def test_a_folder_swapped_for_a_symlink_while_being_made_is_refused(tmp_path, monkeypatch):
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    def lose_the_race(folder, *args, **kwargs):
+        folder.symlink_to(elsewhere)  # another process made it first, as a link
+        raise FileExistsError(folder)
+
+    monkeypatch.setattr(Path, "mkdir", lose_the_race)
+    with pytest.raises(StoreRefused, match="symlink"):
+        open_store(tmp_path / "made" / "store.sqlite3")
+    assert list(elsewhere.iterdir()) == []
+
+
+class _NoWal(sqlite3.Connection):
+    """A connection whose switch to WAL leaves the file in rollback mode."""
+
+    def execute(self, sql, *args):
+        if sql == "PRAGMA journal_mode=WAL":
+            return super().execute("SELECT 'delete'")
+        return super().execute(sql, *args)
+
+
+def test_a_store_that_cannot_use_wal_is_refused(tmp_path, monkeypatch):
+    connect = sqlite3.connect
+    monkeypatch.setattr(sqlite3, "connect", lambda *a, **kw: connect(*a, factory=_NoWal, **kw))
+    with pytest.raises(StoreRefused, match="WAL"):
+        open_store(tmp_path / "store.sqlite3")
+
+
+def test_a_wal_switch_still_busy_at_the_deadline_raises(tmp_path, monkeypatch):
+    path = tmp_path / "store.sqlite3"
+    open_store(path).close()
+    with closing(sqlite3.connect(path, isolation_level=None)) as raw:
+        raw.execute("PRAGMA journal_mode=DELETE")
+    monkeypatch.setattr("mycelium.store.sqlite.BUSY_TIMEOUT_SECONDS", 0.2)
+    writer = sqlite3.connect(path, isolation_level=None)
+    writer.execute("BEGIN IMMEDIATE")  # RESERVED: the switch fails at once, every try
+    outcome = []
+
+    def open_it():
+        try:
+            open_store(path).close()
+            outcome.append("opened")
+        except sqlite3.OperationalError as error:
+            outcome.append(error.sqlite_errorcode)
+
+    opener = threading.Thread(target=open_it, daemon=True)
+    try:
+        opener.start()
+        opener.join(10)
+        assert outcome == [sqlite3.SQLITE_BUSY]
+    finally:
+        writer.execute("ROLLBACK")
+        writer.close()
+        opener.join(10)
+
+
+def test_a_loose_wal_and_shm_left_by_a_crash_are_made_owner_only(tmp_path):
+    path = tmp_path / "store.sqlite3"
+    open_store(path).close()
+    _crash_leaving_a_wal(
+        path, "INSERT INTO messages (role, body, created_at) VALUES ('role-01', 'kept', 'now')"
+    )
+    for suffix in ("-wal", "-shm"):
+        path.with_name(path.name + suffix).chmod(0o644)
+    store = open_store(path)
+    for name in ("store.sqlite3", "store.sqlite3-wal", "store.sqlite3-shm"):
+        assert (tmp_path / name).stat().st_mode & 0o777 == 0o600, name
+    assert [m.body for m in store.read("role-01", after=0)] == ["kept"]
+    store.close()

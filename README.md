@@ -32,8 +32,8 @@ uvx --python 3.13 --from git+https://github.com/kodhama/mycelium@<tag> mycelium 
 
 ## Where it keeps its files
 
-`mycelium paths` prints them. Resolving them creates nothing; a folder
-appears only when something is written there.
+`mycelium paths` prints them. Resolving them creates nothing. **Opening
+the store creates it, even to read**: its folders, its file and its schema.
 
 | folder | default | holds |
 | --- | --- | --- |
@@ -49,11 +49,16 @@ When an `XDG_*` variable is unset, empty or relative, mycelium uses
   target, so on macOS a folder under `/var` and the same one under
   `/private/var` are one path.
 - **Its files are owner-only.** Folders mycelium creates are `0700`. The
-  store and its `-wal` and `-shm` files are `0600`, and an existing store
-  file with a looser mode is tightened when it is opened.
-- **It does not follow a symlink.** The store's path must be canonical: a
-  symlink anywhere in it, such as a linked `kodhama/` folder, is refused with
-  an error before anything is created through it.
+  store and its `-wal` and `-shm` files are `0600`, and any of them with a
+  looser mode is tightened when the store is opened. A folder that already
+  exists keeps its mode and owner: mycelium neither tightens nor checks it.
+- **It refuses a symlink it finds when the store opens.** The store's path
+  must be canonical: a symlink anywhere in it, such as a linked `kodhama/`
+  folder, or in place of the store, `-wal` or `-shm` file, is refused with an
+  error before anything is created through it.
+- **These checks catch a misconfiguration, not an attacker.** They run as the
+  store opens. A process running as the same user that swaps a link into the
+  `0700` folder while the store opens can get past them.
 
 ## What the store survives
 
@@ -65,7 +70,9 @@ with `synchronous=NORMAL` and `fullfsync` off. Full sync would cost about
 
 **A store written by a newer mycelium is refused, not misread.** The file
 records its schema version, and an older mycelium that finds a newer one
-stops with an error saying to update, and leaves the file as it was.
+stops with an error saying to update. It reads the version before it
+writes anything, so the store's data, a WAL left by a crash included, stays
+as it was.
 
 ## Develop
 

@@ -5,12 +5,12 @@ Durability bar: survive a process crash, not power loss
 every committed write through a killed process; fullfsync stays off.
 """
 
-import errno
 import os
 import sqlite3
+import stat
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -44,7 +44,11 @@ _SCHEMA = (
 class SqliteStore:
     def __init__(self, path: Path) -> None:
         _make_private_dirs(path.parent)
-        _open_private_file(path)
+        _check_store_files(path, tighten=False)
+        # Refuse a newer file before anything here can write to it.
+        _refuse_newer_schema(path)
+        _create_store_file(path)
+        _check_store_files(path, tighten=True)
         # isolation_level=None: no implicit transactions; each one below is explicit.
         self._db = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS, isolation_level=None)
         try:
@@ -92,13 +96,7 @@ class SqliteStore:
             raise StoreRefused(f"the store cannot use WAL here (journal mode {mode})")
 
     def _checked_version(self) -> int:
-        version = self._pragma("user_version")
-        if version > SCHEMA_VERSION:
-            raise StoreRefused(
-                f"store schema {version} is newer than this mycelium reads"
-                f" ({SCHEMA_VERSION}); update mycelium"
-            )
-        return version
+        return _checked(self._pragma("user_version"))
 
     def _pragma(self, name: str) -> int | str:
         return self._db.execute(f"PRAGMA {name}").fetchone()[0]
@@ -189,22 +187,55 @@ def _prefixes(relative: Path) -> list[Path]:
     return [Path(*relative.parts[: n + 1]) for n in range(len(relative.parts))]
 
 
-def _open_private_file(path: Path) -> None:
-    """Create the store file if it is missing, never through a symlink, and make it
-    and any -wal or -shm file beside it owner-only.
+def _checked(version: int) -> int:
+    if version > SCHEMA_VERSION:
+        raise StoreRefused(
+            f"store schema {version} is newer than this mycelium reads"
+            f" ({SCHEMA_VERSION}); update mycelium"
+        )
+    return version
+
+
+def _refuse_newer_schema(path: Path) -> None:
+    """Read the schema version over a read-only connection, which can neither
+    checkpoint nor delete a WAL a crash left. It may still rebuild -shm, the
+    index SQLite derives from the WAL, or add an empty -wal beside a clean file."""
+    if not os.path.lexists(path):
+        return
+    uri = f"{path.absolute().as_uri()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)) as read_only:
+        _checked(read_only.execute("PRAGMA user_version").fetchone()[0])
+
+
+def _store_files(path: Path) -> tuple[Path, Path, Path]:
+    return path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")
+
+
+def _create_store_file(path: Path) -> None:
+    """Create a missing store file owner-only.
+
+    Only a file this call created is opened: closing a descriptor on a database
+    file drops every POSIX lock this process holds on it, a connection's
+    included (sqlite.org/howtocorrupt.html, section 2.2)."""
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        return  # there already, or another first run made it a moment ago
+    os.close(fd)
+
+
+def _check_store_files(path: Path, *, tighten: bool) -> None:
+    """Refuse a store, -wal or -shm file that is a symlink, and with `tighten`
+    make each one owner-only, by path and never through a descriptor.
 
     SQLite gives a new -wal or -shm file the database file's permissions."""
-    for name in (path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")):
-        create = os.O_CREAT if name == path else 0
+    for name in _store_files(path):
         try:
-            fd = os.open(name, os.O_RDWR | create | os.O_NOFOLLOW, 0o600)
+            mode = os.lstat(name).st_mode
         except FileNotFoundError:
             continue  # no -wal or -shm yet
-        except OSError as error:
-            if error.errno == errno.ELOOP:
-                raise StoreRefused(f"{name} is a symlink; mycelium does not follow one") from error
-            raise
-        try:
-            os.fchmod(fd, 0o600)
-        finally:
-            os.close(fd)
+        if stat.S_ISLNK(mode):
+            raise StoreRefused(f"{name} is a symlink; mycelium does not follow one")
+        if tighten and stat.S_IMODE(mode) != 0o600:
+            with suppress(FileNotFoundError):  # a closing connection removed it
+                os.chmod(name, 0o600)
