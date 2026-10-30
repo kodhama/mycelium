@@ -80,8 +80,9 @@ class SqliteStore:
 
     def _use_wal(self) -> None:
         # journal_mode cannot change inside a transaction, and WAL persists in the
-        # file. The switch needs the file to itself and does not wait on the busy
-        # timeout, so an opener racing another first run retries it here.
+        # file. The switch needs the file to itself: it waits out the busy timeout
+        # behind a reader but fails at once behind a writer, so an opener racing
+        # another first run retries it here.
         deadline = time.monotonic() + BUSY_TIMEOUT_SECONDS
         while True:
             try:
