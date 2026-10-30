@@ -45,7 +45,8 @@ class SqliteStore:
     def __init__(self, path: Path) -> None:
         _make_private_dirs(path.parent)
         _check_store_files(path, tighten=False)
-        # Refuse a newer file before anything here can write to it.
+        # Refuse a newer file before anything here can write to it (but for a
+        # hot rollback journal, which the read-write open must roll back first).
         _refuse_newer_schema(path)
         # isolation_level=None: no implicit transactions; each one below is explicit.
         # SQLite creates a missing file, so this process never holds a descriptor

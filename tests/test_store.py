@@ -1,3 +1,5 @@
+import builtins
+import io
 import multiprocessing
 import os
 import signal
@@ -502,13 +504,18 @@ def test_opening_the_store_opens_no_descriptor_on_its_files(tmp_path, monkeypatc
     # process holds on it; another thread's first open could hold one.
     path = tmp_path / "store.sqlite3"
     opened = []
-    real_open = os.open
 
-    def recording_open(name, *args, **kwargs):
-        opened.append(os.fspath(name))
-        return real_open(name, *args, **kwargs)
+    def recording(real):
+        def record(name, *args, **kwargs):
+            if isinstance(name, str | bytes | os.PathLike):
+                opened.append(os.fsdecode(name))
+            return real(name, *args, **kwargs)
 
-    monkeypatch.setattr(os, "open", recording_open)
+        return record
+
+    monkeypatch.setattr(os, "open", recording(os.open))
+    monkeypatch.setattr(io, "open", recording(io.open))  # what Path.open calls
+    monkeypatch.setattr(builtins, "open", recording(builtins.open))
     open_store(path).close()
     open_store(path).close()
     assert [name for name in opened if os.path.basename(name).startswith(path.name)] == []

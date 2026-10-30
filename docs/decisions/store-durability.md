@@ -55,11 +55,13 @@ refused before anything writes to it. The version is read over a read-only
 connection, which can neither checkpoint nor delete a WAL a crash left, and
 before any file's mode is changed. That connection may still rebuild `-shm`,
 the index SQLite derives from the WAL, or add an empty `-wal` beside a clean
-file. A hot rollback journal, left by a crash before the switch to WAL, is
-the one thing a read-only connection cannot read past. Such a file has no
-WAL to protect, so the check falls through to the read-write open, which
-rolls the journal back. `tests/test_store.py` starts 24 processes on one fresh path at once,
-and opens a file caught between the two steps while another connection holds
+file. The one exception is a hot rollback journal, left by a crash before
+the switch to WAL, which a read-only connection cannot read past. Such a
+file has no WAL to protect, so the check falls through to the read-write
+open: it tightens the modes and rolls the journal back to the last commit,
+as any SQLite client would, and only then reads the version and refuses.
+`tests/test_store.py` starts 24 processes on one fresh path at once, and
+opens a file caught between the two steps while another connection holds
 the write lock.
 
 **No descriptor on a store file that may be in use.** Closing any descriptor
@@ -69,7 +71,9 @@ connection's included
 section 2.2). Opening the store therefore checks for symlinks with `lstat`
 and tightens modes with `chmod` by path. It never opens a store file itself:
 SQLite creates a missing one, and its mode is tightened before anything is
-written to it. A test holds the write lock in one process, opens the store
+written to it. Until then the new file is empty and has SQLite's default
+mode (0644 under the usual umask); inside a folder only its owner can enter,
+which mycelium makes its own folders, no one else can open it. A test holds the write lock in one process, opens the store
 there, and checks that another process is still kept out. Two threads making
 the first open at once raced on a descriptor of mycelium's own; with none
 left, there is no window to test, so a test checks instead that opening the
