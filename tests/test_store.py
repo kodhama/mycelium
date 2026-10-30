@@ -182,7 +182,8 @@ def _post_forever(path, ready, acknowledged):
 def test_a_killed_writer_loses_no_acknowledged_message(tmp_path):
     path = tmp_path / "store.sqlite3"
     ready = CTX.Event()
-    acknowledged = CTX.Value("q", 0)
+    # Lock-free: a SIGKILL while the child held a lock would hang the read below.
+    acknowledged = CTX.Value("q", 0, lock=False)
     writer = CTX.Process(target=_post_forever, args=(path, ready, acknowledged), daemon=True)
     writer.start()
     try:
@@ -468,3 +469,46 @@ def test_a_loose_wal_and_shm_left_by_a_crash_are_made_owner_only(tmp_path):
         assert (tmp_path / name).stat().st_mode & 0o777 == 0o600, name
     assert [m.body for m in store.read("role-01", after=0)] == ["kept"]
     store.close()
+
+
+def _crash_mid_transaction(path):
+    # A rollback-mode file with one committed row, then a transaction whose
+    # pages spill into the database before the process dies: a hot journal.
+    raw = sqlite3.connect(path, isolation_level=None)
+    raw.execute("CREATE TABLE early (n INTEGER)")
+    raw.execute("INSERT INTO early VALUES (1)")
+    raw.execute("PRAGMA cache_size=1")
+    raw.execute("BEGIN")
+    raw.executemany("INSERT INTO early VALUES (?)", [(n,) for n in range(2, 5000)])
+    os._exit(0)
+
+
+def test_a_hot_rollback_journal_from_a_crash_is_rolled_back_on_open(tmp_path):
+    path = tmp_path / "store.sqlite3"
+    crasher = CTX.Process(target=_crash_mid_transaction, args=(path,))
+    crasher.start()
+    crasher.join(30)
+    assert crasher.exitcode == 0
+    assert path.with_name(path.name + "-journal").stat().st_size > 0
+    store = open_store(path)
+    store.append("role-01", "after the crash")
+    store.close()
+    with closing(sqlite3.connect(path)) as raw:
+        assert raw.execute("SELECT n FROM early").fetchall() == [(1,)]
+
+
+def test_opening_the_store_opens_no_descriptor_on_its_files(tmp_path, monkeypatch):
+    # Closing any descriptor on a database file drops every POSIX lock this
+    # process holds on it; another thread's first open could hold one.
+    path = tmp_path / "store.sqlite3"
+    opened = []
+    real_open = os.open
+
+    def recording_open(name, *args, **kwargs):
+        opened.append(os.fspath(name))
+        return real_open(name, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", recording_open)
+    open_store(path).close()
+    open_store(path).close()
+    assert [name for name in opened if os.path.basename(name).startswith(path.name)] == []

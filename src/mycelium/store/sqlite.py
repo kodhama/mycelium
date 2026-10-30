@@ -47,11 +47,13 @@ class SqliteStore:
         _check_store_files(path, tighten=False)
         # Refuse a newer file before anything here can write to it.
         _refuse_newer_schema(path)
-        _create_store_file(path)
-        _check_store_files(path, tighten=True)
         # isolation_level=None: no implicit transactions; each one below is explicit.
+        # SQLite creates a missing file, so this process never holds a descriptor
+        # of its own on it (see _check_store_files).
         self._db = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS, isolation_level=None)
         try:
+            # Before anything is written: a new file is empty until the schema.
+            _check_store_files(path, tighten=True)
             self._create_schema()
             self._use_wal()
             self._db.execute("PRAGMA synchronous=NORMAL")
@@ -200,36 +202,37 @@ def _checked(version: int) -> int:
 def _refuse_newer_schema(path: Path) -> None:
     """Read the schema version over a read-only connection, which can neither
     checkpoint nor delete a WAL a crash left. It may still rebuild -shm, the
-    index SQLite derives from the WAL, or add an empty -wal beside a clean file."""
+    index SQLite derives from the WAL, or add an empty -wal beside a clean file.
+
+    A hot rollback journal, left by a crash before the switch to WAL, is the one
+    thing it cannot read past. Such a file has no WAL to protect, so the check
+    is left to the read-write open, which rolls the journal back first."""
     if not os.path.lexists(path):
         return
     uri = f"{path.absolute().as_uri()}?mode=ro"
     with closing(sqlite3.connect(uri, uri=True, timeout=BUSY_TIMEOUT_SECONDS)) as read_only:
-        _checked(read_only.execute("PRAGMA user_version").fetchone()[0])
+        try:
+            version = read_only.execute("PRAGMA user_version").fetchone()[0]
+        except sqlite3.OperationalError as error:
+            if error.sqlite_errorcode == sqlite3.SQLITE_READONLY_ROLLBACK:
+                return
+            raise
+    _checked(version)
 
 
 def _store_files(path: Path) -> tuple[Path, Path, Path]:
     return path, path.with_name(path.name + "-wal"), path.with_name(path.name + "-shm")
 
 
-def _create_store_file(path: Path) -> None:
-    """Create a missing store file owner-only.
-
-    Only a file this call created is opened: closing a descriptor on a database
-    file drops every POSIX lock this process holds on it, a connection's
-    included (sqlite.org/howtocorrupt.html, section 2.2)."""
-    try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    except FileExistsError:
-        return  # there already, or another first run made it a moment ago
-    os.close(fd)
-
-
 def _check_store_files(path: Path, *, tighten: bool) -> None:
     """Refuse a store, -wal or -shm file that is a symlink, and with `tighten`
-    make each one owner-only, by path and never through a descriptor.
+    make each one owner-only.
 
-    SQLite gives a new -wal or -shm file the database file's permissions."""
+    Only by path, never through a descriptor: closing a descriptor on a database
+    file drops every POSIX lock this process holds on it, a connection's
+    included (sqlite.org/howtocorrupt.html, section 2.2), and another thread's
+    connection may hold one. SQLite gives a new -wal or -shm file the database
+    file's permissions."""
     for name in _store_files(path):
         try:
             mode = os.lstat(name).st_mode

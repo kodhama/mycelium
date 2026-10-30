@@ -55,7 +55,10 @@ refused before anything writes to it. The version is read over a read-only
 connection, which can neither checkpoint nor delete a WAL a crash left, and
 before any file's mode is changed. That connection may still rebuild `-shm`,
 the index SQLite derives from the WAL, or add an empty `-wal` beside a clean
-file. `tests/test_store.py` starts 24 processes on one fresh path at once,
+file. A hot rollback journal, left by a crash before the switch to WAL, is
+the one thing a read-only connection cannot read past. Such a file has no
+WAL to protect, so the check falls through to the read-write open, which
+rolls the journal back. `tests/test_store.py` starts 24 processes on one fresh path at once,
 and opens a file caught between the two steps while another connection holds
 the write lock.
 
@@ -63,10 +66,14 @@ the write lock.
 on a database file drops every POSIX lock the process holds on it, a
 connection's included
 ([How To Corrupt An SQLite Database File](https://sqlite.org/howtocorrupt.html),
-section 2.2). Opening the store therefore checks for symlinks with `lstat`,
-tightens modes with `chmod` by path, and opens only a store file it has just
-created with `O_EXCL`. A test holds the write lock in one process, opens the
-store there, and checks that another process is still kept out.
+section 2.2). Opening the store therefore checks for symlinks with `lstat`
+and tightens modes with `chmod` by path. It never opens a store file itself:
+SQLite creates a missing one, and its mode is tightened before anything is
+written to it. A test holds the write lock in one process, opens the store
+there, and checks that another process is still kept out. Two threads making
+the first open at once raced on a descriptor of mycelium's own; with none
+left, there is no window to test, so a test checks instead that opening the
+store opens no descriptor on its files.
 
 **What would change it.** If a later unit needs mail to survive power loss,
 turn on `fullfsync` and record the measured cost in a new dated entry here.
