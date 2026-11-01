@@ -1,0 +1,9 @@
+# Gitleaks configuration for the CI secrets step, taken from kodhama/ogham's.
+#
+# Extends gitleaks' built-in default rule set; nothing here weakens it.
+# Carve an allowlist ONLY with a written reason next to it: a finding
+# suppressed in silence is a secret shipped in silence. Test fixtures use
+# obvious placeholders. No allowlist entries exist.
+
+[extend]
+useDefault = true

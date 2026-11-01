@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# Session state the skills and Compound Engineering write: bindings and
+# handoffs name transcript paths under a real home directory.
+.context/

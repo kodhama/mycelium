@@ -1,0 +1,82 @@
+name: test
+
+# Lint, tests and a secrets scan on every push to main and every PR. The job's
+# name, `test`, is the check main's ruleset requires once it has first
+# reported.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same pull request cancels the older run; pushes to main
+# each keep their own run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Full history: hatch-vcs reads the version from the tags.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Lint
+        run: uv run --locked --python 3.13 ruff check
+
+      - name: Format
+        run: uv run --locked --python 3.13 ruff format --check
+
+      - name: Tests
+        run: uv run --locked --python 3.13 pytest
+
+      # The entry point as an installer runs it: build the wheel, then run its
+      # `mycelium --version` outside the project environment.
+      - name: Package
+        run: |
+          uv build --wheel --out-dir dist
+          uvx --python 3.13 --from dist/*.whl mycelium --version
+
+      # The pinned gitleaks binary, checked against its published SHA-256 (the
+      # release is not immutable), with redacted output, over the commits this
+      # run adds. On a first push `before` is all zeros, and after a force-push
+      # it is a commit this clone lacks: scan everything in both cases, because
+      # gitleaks exits 0 with nothing scanned when the range is invalid.
+      - name: Secrets
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+          SECRETS_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          echo "${GITLEAKS_SHA256}  /tmp/gitleaks.tgz" | sha256sum -c -
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          if [ -z "${SECRETS_BASE}" ] || [ "${SECRETS_BASE}" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${SECRETS_BASE}^{commit}" 2>/dev/null; then
+            /tmp/gitleaks git . --config .gitleaks.toml --redact --no-banner
+          else
+            /tmp/gitleaks git . --config .gitleaks.toml --redact --no-banner --log-opts "${SECRETS_BASE}..HEAD"
+          fi
+
+  # The tests again on the oldest Python that pyproject.toml's requires-python
+  # allows, as a job of its own: a matrix would rename `test`, the check main's
+  # ruleset requires.
+  floor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Tests
+        run: uv run --locked --python 3.11 pytest
