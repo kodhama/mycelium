@@ -503,6 +503,10 @@ class _Files:
         for path in paths:
             try:
                 text = path.read_text()
+            except FileNotFoundError:
+                continue  # gone since the glob, or a dangling link: nothing to keep
+            except UnicodeDecodeError:
+                continue  # damaged: rebuilt from the clusters
             except OSError as error:  # skipped, it would be deleted as unwanted
                 raise IndexUnavailable(f"{path} can't be read: {error}") from None
             try:

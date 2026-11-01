@@ -297,6 +297,26 @@ def test_a_damaged_cache_or_snapshot_is_rebuilt_from_the_clusters(tree):
     assert index.manager("mq-pm") == "root-lead"
 
 
+def test_a_snapshot_that_isnt_text_is_damaged_and_rebuilt(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    for path in (found.paths.state / "index" / "last-good").glob("*.json"):
+        path.write_bytes(b"\xff\xfe not utf-8")
+    (found.paths.cache / "index.json").unlink()
+    index = refresh(found.paths, read=found.read).index
+    assert index.manager("mq-pm") == "root-lead"
+
+
+def test_a_snapshot_that_is_gone_when_read_is_skipped(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    folder = found.paths.state / "index" / "last-good"
+    (folder / "dangling.json").symlink_to(folder / "nowhere.json")
+    (found.paths.cache / "index.json").unlink()
+    index = refresh(found.paths, read=found.read).index
+    assert index.manager("mq-pm") == "root-lead"
+
+
 def test_damaged_hold_records_are_reported_never_dropped(tree):
     found = tree("org")
     refresh(found.paths, read=found.read)
