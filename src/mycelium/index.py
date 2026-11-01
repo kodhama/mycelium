@@ -9,7 +9,10 @@ not lose lives in state (R28):
 - **last-good snapshots**, one per cluster that validated, so a cluster that
   later fails keeps its last good entry, marked stale (KTD18);
 - **hold records** for names that left every cluster, with their last-known
-  manager, kept 7 days (KTD7). Ending a hold is `sweep`'s job, not this one's.
+  manager, kept 7 days (KTD7). Ending a hold is `sweep`'s job, not this one's;
+- **the published names**: every name the last rebuild made routable, with
+  its last-known manager, so a name leaves into a hold whether or not its
+  manager was ever known, and a cache wipe reports nothing as added.
 
 A validation failure never makes a name gone; a registered home that is gone,
 or holds no cluster.toml, does.
@@ -44,8 +47,9 @@ HAND_EDITED = (
 
 
 class IndexUnavailable(Exception):
-    """The index's own files can't be used: damaged hold records, or a symlink
-    where mycelium's state or cache folder should be."""
+    """The index's own files can't be used: damaged hold or published-name
+    records, a folder that can't be made or written, or a symlink where
+    mycelium's state or cache folder should be."""
 
 
 @dataclass(frozen=True)
@@ -95,6 +99,10 @@ class Change:
     name: str
     old: str | None = None
     new: str | None = None
+    old_known: bool = True
+    """False when the old manager wasn't known: None then means unknown, not "none" (R23)."""
+    new_known: bool = True
+    """The same, for the new manager."""
 
 
 class Index:
@@ -219,35 +227,24 @@ def _rebuild(
 ) -> Refresh:
     snapshots = files.snapshots()
     held_before = files.holds()
+    published_before = files.published()
     holds = dict(held_before)
     present = [
         (os.path.realpath(record.home), record) for record in records if record.status != "missing"
     ]
     failing: dict[str, list[str]] = {}
-    inputs = []
-    opaque = set()  # failing, unreadable and never good: nothing is known of them
     current: dict[str, Declared] = {}
     for home, record in present:
         suffix = None if record.instance is None else record.instance.suffix
         if record.status == "ok":
             current[home] = Declared(home, suffix, record.declaration or {})
         problem = _problem(record)
-        if problem is None:
-            inputs.append(current[home])
-            continue
-        failing[home] = [problem]
-        # Its pointers still place the clusters below it, and its names stay known.
-        if home in snapshots:
-            snapshot = snapshots[home]
-            inputs.append(Declared(home, snapshot["suffix"], snapshot["declaration"]))
-        elif home in current:
-            inputs.append(current[home])
-        else:
-            opaque.add(home)
-
-    graph = build(inputs, opaque=opaque)
-    for home, reasons in graph.errors.items():
-        failing.setdefault(home, []).extend(reasons)
+        if problem is not None:
+            failing[home] = [problem]
+    graph = _build(present, current, snapshots, failing)
+    # A failing cluster with a snapshot places the clusters below it by its last good
+    # pointers. One without places them by what it declares now, or (unreadable) not at all.
+    unplaced = sorted(home for home in failing if home not in snapshots)
 
     slices: dict[str, Slice] = {}
     kept: dict[str, dict[str, Any]] = {}
@@ -262,14 +259,18 @@ def _rebuild(
                 for found in unknown(current[home], reason):
                     slices[found.name] = found
             continue
-        above = _failing_above(home, graph.parent, failing)
+        stale = _failing_above(home, graph.parent, failing)
         made = [graph.slices[name] for name in graph.names.get(home, [])]
+        if stale is None and unplaced and any(found.orphan for found in made):
+            what = (
+                "can't be read" if all(h not in current for h in unplaced) else "fails validation"
+            )
+            stale = f"a cluster that {what} may point at this one: " + ", ".join(unplaced)
         for found in made:
-            if above is None and found.orphan and opaque:
-                above = "a cluster that can't be read may point at this one: " + ", ".join(
-                    sorted(opaque)
-                )
-            slices[found.name] = found if above is None else _stale(found, above)
+            slices[found.name] = found if stale is None else _stale(found, stale)
+        if stale is not None and home in snapshots:
+            kept[home] = snapshots[home]  # a view through a failing cluster is not a good one
+            continue
         kept[home] = {
             "format": FORMAT,
             "home": home,
@@ -279,12 +280,51 @@ def _rebuild(
             "slices": [found.to_json() for found in made],
         }
 
-    changes = _changes(snapshots, slices, holds, now)
+    before = _published_from(snapshots) | published_before
+    published = _publish(slices, before, held_before)
+    changes = _changes(before, slices, holds, now)
     errors = {home: tuple(reasons) for home, reasons in failing.items()}
     if not write:
         return Refresh(Index(slices, errors, holds), True, ())
-    files.write(kept, snapshots, holds, held_before, key, read_at, slices, errors)
+    files.write(
+        kept,
+        snapshots,
+        holds,
+        held_before,
+        published,
+        published_before,
+        key,
+        read_at,
+        slices,
+        errors,
+    )
     return Refresh(Index(slices, errors, holds), True, tuple(changes))
+
+
+def _build(present, current, snapshots, failing: dict[str, list[str]]):
+    """The graph, with each failing cluster that has a snapshot read from it.
+
+    A graph error can make a cluster fail that passed on its own (a sealed
+    `reports_at` typo), so building repeats until no new failing cluster has
+    last good pointers to fall back on. `failing` gains every error found."""
+    while True:
+        used = {home for home in failing if home in snapshots}
+        inputs = []
+        opaque = set()  # failing, unreadable and never good: nothing is known of them
+        for home, _record in present:
+            if home in used:
+                snapshot = snapshots[home]
+                inputs.append(Declared(home, snapshot["suffix"], snapshot["declaration"]))
+            elif home in current:
+                inputs.append(current[home])
+            else:
+                opaque.add(home)
+        graph = build(inputs, opaque=opaque)
+        for home, reasons in graph.errors.items():
+            listed = failing.setdefault(home, [])
+            listed.extend(reason for reason in reasons if reason not in listed)
+        if {home for home in failing if home in snapshots} == used:
+            return graph
 
 
 def _stale(found: Slice, reason: str) -> Slice:
@@ -302,23 +342,72 @@ def _failing_above(home: str, parent: Mapping[str, str], failing: Mapping[str, l
     return None
 
 
-def _changes(snapshots, slices: Mapping[str, Slice], holds: dict[str, Hold], now: float):
-    """Holds made and dropped in `holds`, and what changed since the snapshots."""
-    before = {data["name"]: data for snapshot in snapshots.values() for data in snapshot["slices"]}
+Published = dict[str, dict[str, Any]]
+"""Each routable name, mapped to its last-known manager: {"manager": ..., "known": ...}."""
+
+
+def _known(found: Slice) -> bool:
+    """Whether the slice's manager can be taken as the name's manager: a stale
+    slice that has none may simply not know it."""
+    return found.known and (found.stale is None or found.manager is not None)
+
+
+def _published_from(snapshots) -> Published:
+    return {
+        data["name"]: {"manager": data["manager"], "known": data["known"]}
+        for snapshot in snapshots.values()
+        for data in snapshot["slices"]
+    }
+
+
+def _publish(slices: Mapping[str, Slice], before: Published, held: Mapping[str, Hold]) -> Published:
+    """What this rebuild publishes. A name whose manager isn't known now keeps
+    the last one known, from the last rebuild or from the hold it returns from."""
+    published = {}
+    for name, found in slices.items():
+        if _known(found):
+            published[name] = {"manager": found.manager, "known": True}
+        elif before.get(name, {}).get("known"):
+            published[name] = before[name]
+        elif name in held and held[name].manager is not None:
+            published[name] = {"manager": held[name].manager, "known": True}
+        else:
+            published[name] = {"manager": None, "known": False}
+    return published
+
+
+def _changes(before: Published, slices: Mapping[str, Slice], holds: dict[str, Hold], now: float):
+    """Holds made and dropped in `holds`, and what changed since the last rebuild.
+
+    Every name the last rebuild published and this one doesn't is held, known
+    or not (KTD7). A stale slice reports no manager change: it isn't current."""
     changes = []
     for name in sorted(set(before) - set(slices)):
         if name not in holds:
-            holds[name] = Hold(name, now, before[name]["manager"])
-            changes.append(Change("held", name, old=before[name]["manager"]))
+            manager = before[name]["manager"] if before[name]["known"] else None
+            holds[name] = Hold(name, now, manager)
+            changes.append(Change("held", name, old=manager, old_known=before[name]["known"]))
     for name in list(holds):
         if name in slices:
             del holds[name]
     for name in sorted(slices):
         found = slices[name]
+        known = _known(found)
         if name not in before:
-            changes.append(Change("added", name, new=found.manager))
-        elif found.known and before[name]["manager"] != found.manager:
-            changes.append(Change("manager", name, old=before[name]["manager"], new=found.manager))
+            new = found.manager if known else None
+            changes.append(Change("added", name, new=new, new_known=known))
+        elif known and found.stale is None:
+            old = before[name]
+            if not old["known"] or old["manager"] != found.manager:
+                changes.append(
+                    Change(
+                        "manager",
+                        name,
+                        old=old["manager"] if old["known"] else None,
+                        new=found.manager,
+                        old_known=old["known"],
+                    )
+                )
     return changes
 
 
@@ -330,10 +419,13 @@ class _Files:
         self.state = paths.state / "index"
         self.snapshot_dir = self.state / "last-good"
         self.holds_file = self.state / "holds.json"
+        self.published_file = self.state / "published.json"
         self.lock_file = self.state / "lock"
 
     def has_state(self) -> bool:
-        return self.holds_file.exists() or self.snapshot_dir.exists()
+        return any(
+            path.exists() for path in (self.holds_file, self.published_file, self.snapshot_dir)
+        )
 
     @contextmanager
     def locked(self, wait: float) -> Iterator[bool]:
@@ -391,32 +483,84 @@ class _Files:
                 f"{self.holds_file} is damaged ({error!r}); mycelium won't guess who is on hold"
             ) from None
 
-    def write(self, kept, before, holds, held_before, key, read_at, slices, errors) -> None:
-        """Write what changed: `before` and `held_before` are what the rebuild read.
+    def published(self) -> Published:
+        """The names the last rebuild published. A damaged file is reported:
+        read as empty, it would let names leave without a hold."""
+        try:
+            text = self.published_file.read_text()
+        except FileNotFoundError:
+            return {}
+        except OSError as error:
+            raise IndexUnavailable(f"{self.published_file} can't be read: {error}") from None
+        try:
+            data = json.loads(text)
+            if data["format"] != FORMAT:
+                raise ValueError(f"format {data['format']!r}")
+            names = data["names"]
+            for name, entry in names.items():
+                manager, known = entry["manager"], entry["known"]
+                if not isinstance(name, str) or not isinstance(known, bool):
+                    raise ValueError(f"the entry for {name!r} is not a name and a known flag")
+                if manager is not None and not isinstance(manager, str):
+                    raise ValueError(f"{name} has a manager that isn't a name")
+            return {
+                name: {"manager": e["manager"], "known": e["known"]} for name, e in names.items()
+            }
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise IndexUnavailable(
+                f"{self.published_file} is damaged ({error!r}); mycelium won't guess who left"
+            ) from None
 
-        Holds go first: a snapshot is removed only once the hold it gives rise
-        to is written, so a crash in between can't lose the hold."""
-        if holds != held_before or not self.holds_file.exists():
-            listed = [holds[name].to_json() for name in sorted(holds)]
-            _write(self.holds_file, {"format": FORMAT, "holds": listed})
-        wanted = {_snapshot_name(home) for home in kept}
-        for home, data in kept.items():
-            if before.get(home) != data:
-                _write(self.snapshot_dir / _snapshot_name(home), data)
-        if self.snapshot_dir.is_dir():
+    def write(
+        self,
+        kept,
+        before,
+        holds,
+        held_before,
+        published,
+        published_before,
+        key,
+        read_at,
+        slices,
+        errors,
+    ) -> None:
+        """Write what changed: `before`, `held_before` and `published_before` are
+        what the rebuild read.
+
+        Every folder is made and checked writable first, so a folder that can't
+        be written stops the rebuild before it changes anything. Then holds go
+        first, and the names published next: a name leaves the published list,
+        and its snapshot is removed, only once its hold is written, so a crash
+        in between can't lose the hold."""
+        for folder in (self.state, self.snapshot_dir, self.cache.parent):
+            _make_dirs(folder)
+            if not os.access(folder, os.W_OK | os.X_OK):
+                raise IndexUnavailable(f"{folder} can't be written")
+        try:
+            if holds != held_before or not self.holds_file.exists():
+                listed = [holds[name].to_json() for name in sorted(holds)]
+                _write(self.holds_file, {"format": FORMAT, "holds": listed})
+            if published != published_before or not self.published_file.exists():
+                _write(self.published_file, {"format": FORMAT, "names": published})
+            wanted = {_snapshot_name(home) for home in kept}
+            for home, data in kept.items():
+                if before.get(home) != data:
+                    _write(self.snapshot_dir / _snapshot_name(home), data)
             for path in self.snapshot_dir.glob("*.json"):
                 if path.name not in wanted:
                     path.unlink()
-        _write(
-            self.cache,
-            {
-                "format": FORMAT,
-                "read_at": read_at,
-                "key": key,
-                "slices": {name: found.to_json() for name, found in slices.items()},
-                "errors": {home: list(reasons) for home, reasons in errors.items()},
-            },
-        )
+            _write(
+                self.cache,
+                {
+                    "format": FORMAT,
+                    "read_at": read_at,
+                    "key": key,
+                    "slices": {name: found.to_json() for name, found in slices.items()},
+                    "errors": {home: list(reasons) for home, reasons in errors.items()},
+                },
+            )
+        except OSError as error:
+            raise IndexUnavailable(f"the index can't be written: {error}") from None
 
 
 def _take(descriptor: int, deadline: float) -> bool:
@@ -496,4 +640,9 @@ def _make_dirs(folder: Path) -> None:
             new.mkdir(mode=0o700)
         except FileExistsError:
             continue  # another process made it a moment ago
-        new.chmod(0o700)
+        except OSError as error:
+            raise IndexUnavailable(f"{new} can't be made: {error}") from None
+        try:
+            new.chmod(0o700)
+        except OSError as error:
+            raise IndexUnavailable(f"{new} can't be made owner-only: {error}") from None

@@ -3,13 +3,19 @@
 import fcntl
 import os
 import shutil
+import subprocess
+import sys
 import time
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from mycelium import index as index_module
 from mycelium.clusters import HelperUnavailable
 from mycelium.index import HAND_EDITED, HOLD_SECONDS, Change, IndexUnavailable, refresh
+
+FAKE = Path(__file__).parent / "fake_cluster_helper.py"
 
 
 def slices(index):
@@ -265,7 +271,7 @@ def test_a_crash_while_writing_never_loses_a_hold(tree, monkeypatch):
         real(path, data)
 
     monkeypatch.setattr(index_module, "_write", crash_on_holds)
-    with pytest.raises(OSError):
+    with pytest.raises(IndexUnavailable, match="killed"):
         refresh(found.paths, read=found.read)
     monkeypatch.setattr(index_module, "_write", real)
     assert refresh(found.paths, read=found.read).index.hold("ex-engine-lead-427").manager == "mq-pm"
@@ -336,3 +342,144 @@ def test_a_new_reason_for_an_unreadable_cluster_is_shown(tree):
     second = refresh(found.paths, read=found.read).index.errors()[found.home("hq/mq")]
     assert first != second
     assert "schema" in second[0]
+
+
+# Review round 1 (lead's review of da79b49, GRO-48 comment 42b48dd8).
+
+
+def snapshot_bytes(found, relative):
+    name = index_module._snapshot_name(found.home(relative))
+    return (found.paths.state / "index" / "last-good" / name).read_bytes()
+
+
+def test_a_graph_error_above_keeps_the_clusters_below_where_they_were_marked_stale(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    before = snapshot_bytes(found, "hq/mq")
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')  # sealed, so not a hand edit
+    result = refresh(found.paths, read=found.read)
+    assert found.home("hq") in result.index.errors()
+    pm = result.index.slice("mq-pm")
+    assert (pm.manager, pm.known, pm.orphan) == ("root-lead", True, False)
+    assert pm.stale is not None and "above" in pm.stale
+    assert result.index.slice("ex-engine-lead-427").stale is not None
+    assert snapshot_bytes(found, "hq/mq") == before
+    assert [change for change in result.changes if change.kind == "manager"] == []
+    found.edit("hq", 'reports_at = ["mqq"]', 'reports_at = ["mq"]')
+    fixed = refresh(found.paths, read=found.read)
+    assert fixed.index.errors() == {}
+    assert fixed.index.slice("mq-pm").stale is None
+    assert fixed.changes == ()
+
+
+def test_a_graph_error_with_no_last_good_marks_what_it_may_place_stale(tree):
+    found = tree("org")
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')
+    pm = refresh(found.paths, read=found.read).index.slice("mq-pm")
+    assert pm.orphan
+    assert pm.stale is not None  # it may sit below the failing cluster: never plain "no manager"
+
+
+def test_names_known_only_as_unknown_are_held_when_they_leave(tree):
+    found = tree("org")
+    found.edit("hq/mq/repos/engine", 'mission = "ex-engine-lead work"', 'mission = "x"', seal=False)
+    first = refresh(found.paths, read=found.read, now=1000.0)
+    assert not first.index.slice("ex-engine-lead-427").known
+    shutil.rmtree(found.root / "hq/mq/repos/engine")
+    later = refresh(found.paths, read=found.read, now=2000.0)
+    hold = later.index.hold("ex-engine-lead-427")
+    assert hold is not None and hold.manager is None
+    assert Change("held", "ex-engine-lead-427", old_known=False) in later.changes
+
+
+def test_a_held_name_that_returns_unknown_keeps_its_last_known_manager(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read, now=1000.0)
+    saved = found.root.parent / "saved"
+    shutil.move(found.root / "hq/mq/repos/engine", saved)
+    refresh(found.paths, read=found.read, now=2000.0)
+    shutil.move(saved, found.root / "hq/mq/repos/engine")
+    found.edit("hq/mq/repos/engine", 'mission = "ex-engine-lead work"', 'mission = "x"', seal=False)
+    back = refresh(found.paths, read=found.read, now=3000.0)
+    assert back.index.hold("ex-engine-lead-427") is None
+    assert not back.index.slice("ex-engine-lead-427").known
+    shutil.rmtree(found.root / "hq/mq/repos/engine")
+    gone = refresh(found.paths, read=found.read, now=4000.0)
+    hold = gone.index.hold("ex-engine-lead-427")
+    assert hold is not None and hold.manager == "mq-pm"
+
+
+def test_unknown_names_are_added_once_and_a_wipe_adds_nothing(tree):
+    found = tree("org")
+    found.edit("hq/mq", 'mission = "mq-pm work"', 'mission = "changed by hand"', seal=False)
+    first = refresh(found.paths, read=found.read)
+    assert Change("added", "mq-pm", new_known=False) in first.changes
+    found.edit("hq/mq/repos/engine", 'run = "running"', 'run = "parked"')
+    second = refresh(found.paths, read=found.read)
+    assert second.rebuilt
+    assert [change for change in second.changes if change.name == "mq-pm"] == []
+    shutil.rmtree(found.paths.cache)
+    third = refresh(found.paths, read=found.read)
+    assert third.rebuilt and third.changes == ()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes through any mode")
+def test_an_unwritable_state_folder_is_reported_and_nothing_is_written(tree):
+    found = tree("org")
+    found.paths.state.mkdir(parents=True)
+    found.paths.state.chmod(0o500)
+    try:
+        with pytest.raises(IndexUnavailable):
+            refresh(found.paths, read=found.read)
+    finally:
+        found.paths.state.chmod(0o700)
+    assert list(found.paths.state.iterdir()) == []
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root writes through any mode")
+def test_an_unwritable_cache_folder_is_reported_before_state_changes(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    holds = (found.paths.state / "index" / "holds.json").read_bytes()
+    shutil.rmtree(found.root / "hq/mq/repos/engine")
+    found.paths.cache.chmod(0o500)
+    try:
+        with pytest.raises(IndexUnavailable):
+            refresh(found.paths, read=found.read)
+    finally:
+        found.paths.cache.chmod(0o700)
+    assert (found.paths.state / "index" / "holds.json").read_bytes() == holds
+
+
+@pytest.mark.parametrize("key", ["cwd", "reports_at", "exclude"])
+def test_a_nul_in_a_path_fails_only_its_own_cluster(tree, key):
+    found = tree("org")
+    records = found.read()
+    mq = next(i for i, record in enumerate(records) if record.home == found.home("hq/mq"))
+    declaration = dict(records[mq].declaration)
+    agents = [dict(agent) for agent in declaration["agent"]]
+    agents[0][key] = "a\x00b" if key == "cwd" else ["a\x00b"]
+    declaration["agent"] = agents
+    records[mq] = replace(records[mq], declaration=declaration)
+    index = refresh(found.paths, read=lambda: records).index
+    assert list(index.errors()) == [found.home("hq/mq")]
+    assert "mq-pm" in index.names()
+    assert index.slice("root-lead").stale is None
+
+
+def test_a_cluster_registered_between_two_calls_is_routable_on_the_second(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    toml = found.toml("newcomer")
+    toml.parent.mkdir(parents=True)
+    toml.write_text(
+        'schema = 1\n\n[[agent]]\nname = "new-lead"\nmanager = ""\nmission = "new work"\n'
+    )
+    subprocess.run([sys.executable, str(FAKE), "seal", str(toml)], check=True)
+    with (found.root / "registry").open("a") as registry:
+        registry.write("newcomer\n")
+    result = refresh(found.paths, read=found.read)
+    found_slice = result.index.slice("new-lead")
+    assert found_slice is not None and found_slice.known and found_slice.orphan
+    assert found_slice.stale is None
+    assert Change("added", "new-lead") in result.changes

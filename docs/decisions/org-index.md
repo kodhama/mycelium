@@ -84,3 +84,36 @@ symlink retargeted with no other change isn't seen until one does.
 alerts belong to U5 and `sweep`. Org events come from the audit log (KTD2,
 U6). A rebuild only returns its changes: names added, names held, managers
 changed.
+
+**2026-11-01 entry: the lead's review of `da79b49` (GRO-48 comment
+`42b48dd8`).** Four rules change. The entries above stand as the record of
+what came first.
+
+- **A graph error above keeps the clusters below where they were.** A
+  cluster can fail on a graph check alone, for example a sealed `reports_at`
+  typo. When it has a snapshot, the graph is built again from that
+  snapshot's pointers, until no new failing cluster has one to fall back on.
+  The clusters below keep their last good place and are marked stale through
+  it. Their snapshots aren't replaced while they're stale. When a failing
+  cluster has no snapshot, every orphan is marked stale, because the failing
+  cluster may be its manager. Before, only an unreadable cluster did this.
+  `topology.build(declarations)` is still the module's one entry.
+- **Names the last rebuild published are kept in state**, in
+  `state/index/published.json`, each with its last-known manager or a flag
+  that none is known. A name that leaves gets a hold whether its manager was
+  known or not, and a name that returns as "unknown" keeps the manager it
+  had. A cache wipe reports nothing as added. A change says when a manager
+  isn't known (`old_known`, `new_known`), so `None` never reads as "no
+  manager" (R23). Like hold records, a damaged file is reported, not read as
+  empty.
+- **A state or cache folder that can't be made or written stops the
+  rebuild before it writes anything**, with `IndexUnavailable`. A write that
+  fails partway also raises `IndexUnavailable`. Holds, then published names,
+  are still written first.
+- **A NUL in an agent's `cwd`, `reports_at` or `exclude` fails that
+  cluster.** The agent stays routable, and the rest of the graph is built.
+
+Turned down, as the review asked: holding every name on an empty helper
+answer while state exists is the designed KTD7 outcome. A decision may use a
+cache read slightly later than its own answer, and the next refresh corrects
+it.

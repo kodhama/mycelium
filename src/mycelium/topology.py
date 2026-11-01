@@ -485,6 +485,11 @@ def _agent(raw: Any, cluster: Declared) -> tuple[_Agent | None, str | None]:
     cwd = raw.get("cwd", ".")
     role = raw.get("role")
     mission = raw.get("mission", "")
+    problem = None
+    if any("\x00" in path for path in [*reports_at, *exclude, cwd if isinstance(cwd, str) else ""]):
+        # A path the filesystem can't take: the cluster fails, and its agent stays routable.
+        problem = f"agent {declared}: a path in cwd, reports_at or exclude holds a NUL character"
+        cwd, reports_at, exclude = ".", [], []
     agent = _Agent(
         name=f"{declared}-{cluster.suffix}" if cluster.suffix else declared,
         declared=declared,
@@ -497,9 +502,9 @@ def _agent(raw: Any, cluster: Declared) -> tuple[_Agent | None, str | None]:
         reports_at=list(reports_at),
         exclude=list(exclude),
     )
-    if not isinstance(cwd, str) or not _inside(cluster.home, cwd):
-        return agent, f"agent {declared}: cwd {cwd!r} leaves the home"
-    return agent, None
+    if problem is None and (not isinstance(cwd, str) or not _inside(cluster.home, cwd)):
+        problem = f"agent {declared}: cwd {cwd!r} leaves the home"
+    return agent, problem
 
 
 def _shape_problems(declaration: Mapping[str, Any]) -> list[str]:
