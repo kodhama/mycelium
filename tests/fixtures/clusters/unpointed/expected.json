@@ -1,0 +1,23 @@
+{
+  "names": [
+    "root-lead",
+    "lone-dev",
+    "lone-lead"
+  ],
+  "errors": {},
+  "slices": {
+    "lone-lead": {
+      "manager": null,
+      "orphan": true,
+      "known": true,
+      "stale": null,
+      "reports": [
+        "lone-dev"
+      ]
+    },
+    "lone-dev": {
+      "manager": "lone-lead",
+      "orphan": true
+    }
+  }
+}

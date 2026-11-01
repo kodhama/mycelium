@@ -1,0 +1,30 @@
+revision = "sha256:eb934961a72d28a56afcfff17fde9dfe3668681221e9a8174dfa7a72631c0b32"
+schema = 1
+
+[[agent]]
+name = "t-lead"
+role = "grove:manager"
+manager = ""
+run = "running"
+mission = "t-lead work"
+
+[[agent]]
+name = "t-dev"
+role = "grove:manager"
+manager = "t-lead"
+run = "running"
+mission = "t-dev work"
+
+[[agent]]
+name = "t-qa"
+role = "grove:manager"
+manager = "t-dev"
+run = "running"
+mission = "t-qa work"
+
+[[agent]]
+name = "t-docs"
+role = "grove:manager"
+manager = "t-lead"
+run = "running"
+mission = "t-docs work"
