@@ -512,16 +512,18 @@ def seal(found, relative):
     subprocess.run([sys.executable, str(FAKE), "seal", str(found.toml(relative))], check=True)
 
 
-def test_an_error_only_a_rejected_declaration_caused_doesnt_outlive_the_fallback(tree):
+def test_a_cluster_a_rejected_declaration_lands_an_error_on_falls_back_and_fails(tree):
+    # Fallbacks only grow: no cluster that fell back is cleared again (lead's ruling on
+    # the third floor review). Failing for a neighbour's conflict is the known cost.
     found = tree("org")
     found.edit("hq/mq", 'reports_at = ["repos/*"]', 'reports_at = ["repos/engine"]')
     refresh(found.paths, read=found.read)
     found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mq", "mqq", "mq/repos/engine"]')
     result = refresh(found.paths, read=found.read)
-    assert list(result.index.errors()) == [found.home("hq")]
+    assert set(result.index.errors()) == {found.home("hq"), found.home("hq/mq/repos/engine")}
     engine = result.index.slice("ex-engine-lead-427")
     assert (engine.manager, engine.known) == ("mq-pm", True)
-    assert engine.stale is not None and "above" in engine.stale
+    assert engine.stale is not None
 
 
 def test_a_child_with_no_last_good_keeps_its_place_below_a_fallback(tree):
@@ -697,3 +699,62 @@ def test_an_unreadable_snapshot_is_reported_and_kept(tree):
     finally:
         path.chmod(0o600)
     assert path.exists()
+
+
+# Third floor review (42af0d6).
+
+
+def _plain(tmp_path, *names):
+    from mycelium.paths import Paths
+    from mycelium.topology import CLUSTER_FILE
+
+    homes = []
+    for name in names:
+        path = tmp_path / name / CLUSTER_FILE
+        path.parent.mkdir(parents=True)
+        path.write_text("")
+        homes.append(os.path.realpath(tmp_path / name))
+    paths = Paths(tmp_path / "state", tmp_path / "data", tmp_path / "cache", tmp_path / "x")
+    return paths, homes
+
+
+def _records(*pairs):
+    from mycelium.clusters import ClusterRecord
+
+    return lambda: [ClusterRecord(home, "ok", None, repr(d), repr(d), None, d) for home, d in pairs]
+
+
+def _agents(*agents):
+    return {
+        "agent": [
+            dict(zip(("name", "manager", "reports_at"), each, strict=False)) for each in agents
+        ]
+    }
+
+
+def test_a_clash_between_two_clusters_that_fall_back_is_reported_on_both(tmp_path):
+    paths, (a, b) = _plain(tmp_path, "a", "b")
+    refresh(
+        paths,
+        read=_records(
+            (a, _agents(("a-lead", "@maintainer"))), (b, _agents(("b-lead", "@maintainer")))
+        ),
+    )
+    a2 = _agents(("a-lead", "@maintainer"), ("dup", "a-lead"))
+    b2 = _agents(("b-lead", "@maintainer"), ("dup", "b-lead"))
+    errors = refresh(paths, read=_records((a, a2), (b, b2))).index.errors()
+    assert set(errors) == {a, b}
+    assert all(any("dup" in reason for reason in errors[home]) for home in (a, b))
+
+
+def test_a_cluster_below_one_that_fell_back_for_a_clash_is_stale_through_it(tmp_path):
+    paths, (h, c, y) = _plain(tmp_path, "h", "c", "y")
+    head = ("h-lead", "@maintainer")
+    h1 = _agents(head, ("boss1", "h-lead", ["../c"]), ("boss2", "h-lead"), ("dup", "h-lead"))
+    h2 = _agents(head, ("boss1", "h-lead"), ("boss2", "h-lead", ["../c"]), ("dup", "h-lead"))
+    c1 = {"agent": [{"name": "c-lead"}]}
+    y1 = _agents(("y-lead", "@maintainer"))
+    y2 = _agents(("y-lead", "@maintainer"), ("dup", "y-lead"))
+    refresh(paths, read=_records((h, h1), (c, c1), (y, y1)))
+    lead = refresh(paths, read=_records((h, h2), (c, c1), (y, y2))).index.slice("c-lead")
+    assert lead.manager == "boss1" and lead.stale is not None

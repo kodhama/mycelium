@@ -92,13 +92,11 @@ what came first.
 - **A graph error above keeps the clusters below where they were.** A
   cluster can fail on a graph check alone, for example a sealed `reports_at`
   typo. A cluster the graph puts an error on falls back to its snapshot's
-  pointers, until no new one does. Fallbacks only grow, so this settles. Each
-  cluster that fell back for a graph error alone is then checked once, on its
-  current declaration against the others as they settled. One that passes
-  doesn't fail: an error another cluster's rejected declaration put on it
-  isn't its own. It is shown from its snapshot, marked stale. The clusters
-  below a failing one keep their last good place and are marked stale
-  through it. No snapshot is written from a stale view, and an existing one
+  pointers, until no new one does. Fallbacks only grow, so this settles. A
+  cluster that falls back fails, with the reasons that made it fall back, so
+  a clash between two clusters is reported on each side that falls back. The
+  clusters below a failing one keep their last good place and are marked
+  stale through it. No snapshot is written from a stale view, and an existing one
   is kept. When a failing cluster has no snapshot, every orphan is marked
   stale, because the failing cluster may be its manager. Before, only an
   unreadable cluster did this. `topology.build(declarations)` is still the
@@ -121,6 +119,14 @@ what came first.
   are still written first.
 - **A NUL in an agent's `cwd`, `reports_at` or `exclude` fails that
   cluster.** The agent stays routable, and the rest of the graph is built.
+
+Known limit, as the lead ruled on the third floor review: a cluster can fail
+for an error another cluster's declaration put on it, such as the target of
+a pointer conflict, and stays failing, its reports stale, until that
+declaration is fixed. Clearing such a cluster on a recheck of its own
+declaration was tried and turned down: each of three reviews found it hid or
+misplaced errors, the worst a clash reported on neither side. It can come
+back as its own story.
 
 Turned down, as the review asked: holding every name on an empty helper
 answer while state exists is the designed KTD7 outcome. A decision may use a

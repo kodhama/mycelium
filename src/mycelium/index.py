@@ -241,7 +241,7 @@ def _rebuild(
         problem = _problem(record)
         if problem is not None:
             failing[home] = [problem]
-    graph, shown_last_good = _build(present, current, snapshots, failing)
+    graph = _build(present, current, snapshots, failing)
     # A failing cluster with a snapshot places the clusters below it by its last good
     # pointers. One without places them by what it declares now, or (unreadable) not at all.
     unplaced = sorted(home for home in failing if home not in snapshots)
@@ -260,8 +260,6 @@ def _rebuild(
                     slices[found.name] = found
             continue
         stale = _failing_above(home, graph.parent, failing)
-        if stale is None and home in shown_last_good:
-            stale = "shown as last good: a failing cluster's declaration clashes with this one's"
         made = [graph.slices[name] for name in graph.names.get(home, [])]
         if stale is None and unplaced and any(found.orphan for found in made):
             what = (
@@ -307,17 +305,14 @@ def _rebuild(
 
 
 def _build(present, current, snapshots, failing: dict[str, list[str]]):
-    """The graph, with each failing cluster that has a snapshot read from it,
-    and the clusters read from their snapshot that don't fail themselves.
+    """The graph, with each failing cluster that has a snapshot read from it.
 
     A graph error can make a cluster fail that passed on its own (a sealed
     `reports_at` typo), so a cluster the graph puts an error on falls back to
-    its snapshot, until no new one does. Fallbacks only grow, so this settles.
-    Then each cluster that fell back for a graph error alone is checked once,
-    on its current declaration against the others as they settled: an error
-    that only another cluster's rejected declaration put on it isn't its own.
-    Such a cluster doesn't fail; it is shown from its snapshot, marked stale.
-    `failing` gains the errors of the settled graph and each fallback's own."""
+    its snapshot, until no new one does. Fallbacks only grow, so this settles,
+    and a cluster that falls back fails with the reasons that made it fall
+    back, even where another cluster's declaration caused them. `failing`
+    gains those reasons and the errors of the settled graph."""
 
     def graph_for(used: set[str]):
         inputs = []
@@ -337,20 +332,15 @@ def _build(present, current, snapshots, failing: dict[str, list[str]]):
     while True:
         graph = graph_for(used)
         more = {home for home in graph.errors if home in snapshots} - used
+        for home in more:
+            failing.setdefault(home, []).extend(graph.errors[home])
         if not more:
             break
         used |= more
-    cleared = set()
-    for home in sorted(used - base):
-        own = graph_for(used - {home}).errors.get(home)
-        if own:
-            failing[home] = list(own)
-        else:
-            cleared.add(home)
     for home, reasons in graph.errors.items():
         listed = failing.setdefault(home, [])
         listed.extend(reason for reason in reasons if reason not in listed)
-    return graph, cleared - set(failing)
+    return graph
 
 
 def _stale(found: Slice, reason: str) -> Slice:
