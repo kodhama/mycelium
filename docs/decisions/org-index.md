@@ -45,7 +45,12 @@ resolved pointers or validation results, `topology.py` is what that replaces.
   (`stored_revision` ≠ `revision`) or any §5.1 error. Its names stay routable.
 - **A failing cluster with no last good entry yet** keeps its names routable.
   Their slice says nothing else is known (`known = false`, manager unknown),
-  which is not "no manager" (R23).
+  which is not "no manager" (R23). When the cluster's file still parses (a
+  hand edit, a graph error), its names and pointers still place the clusters
+  around it, which are marked stale through it. When it can't be read at
+  all, a pointer to it stays valid. A link to a name no readable cluster
+  declares becomes a warning, since it can't be checked. Every orphan's slice
+  is marked stale, since the unreadable cluster may be its manager.
 - **A registered home that is gone, or holds no `cluster.toml`, is
   `missing`.** Its names leave the clusters and get a hold record. That
   record keeps the last-known manager, taken from the graph before the
@@ -59,10 +64,21 @@ resolved pointers or validation results, `topology.py` is what that replaces.
 **Where the files live** (R28): the index in `cache/index.json`; snapshots in
 `state/index/last-good/`, holds in `state/index/holds.json`, and the rebuild
 lock in `state/index/lock`. A rebuild runs under an exclusive `flock`, and
-every file is replaced whole. A caller that can't take the lock within a
-second builds the index in memory and writes nothing, so a hook stays inside
-its timeout. A rebuild with no clusters and no earlier state
+every file is replaced whole. Hold records are written before any snapshot
+is removed, so a process killed mid-write can't lose a hold.
+
+- A caller that can't take the lock within a second builds the index in
+  memory and writes nothing, so a hook stays inside its timeout.
+- The cache records when its helper answer was read. A caller holding an
+  older answer uses a newer cache rather than overwrite it.
+- Like the store, the index refuses a symlink below the XDG folder.
+- A damaged cache or snapshot is rebuilt from the clusters. Damaged hold
+  records are reported, never read as "no holds". A rebuild with no clusters and no earlier state
 writes nothing (KTD13).
+
+**A known limit:** the index rebuilds when a cluster's registration, status,
+reason or revision changes. A move or a new checkout changes one of them. A
+symlink retargeted with no other change isn't seen until one does.
 
 **Left to later units:** ending a hold, forwarding its mail and raising
 alerts belong to U5 and `sweep`. Org events come from the audit log (KTD2,

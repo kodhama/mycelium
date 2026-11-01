@@ -97,3 +97,17 @@ def test_mycelium_itself_never_parses_toml():
         if re.search(r"^\s*(import|from)\s+(tomllib|tomli|toml)\b", path.read_text(), re.M)
     ]
     assert offenders == []
+
+
+def test_a_helper_that_cant_be_executed_is_reported_plainly(tmp_path):
+    helper = tmp_path / "kodhama-cluster"
+    helper.write_text("#!/bin/sh\necho {}\n")
+    helper.chmod(0o644)
+    with pytest.raises(HelperUnavailable, match="can't be run"):
+        read([str(helper), "read", "--json"])
+
+
+def test_output_that_isnt_text_is_refused(tmp_path):
+    argv = script(tmp_path, "import sys\nsys.stdout.buffer.write(b'\\xff\\xfe{}')\n")
+    with pytest.raises(HelperUnavailable, match="unexpected output"):
+        read(argv)

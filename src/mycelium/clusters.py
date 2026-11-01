@@ -68,6 +68,10 @@ def read(
         raise HelperUnavailable(f"the cluster helper ({name}) is not installed") from None
     except subprocess.TimeoutExpired:
         raise HelperUnavailable(f"the cluster helper did not answer within {timeout:g}s") from None
+    except UnicodeDecodeError as error:
+        raise HelperUnavailable(f"the cluster helper gave unexpected output: {error}") from None
+    except OSError as error:  # not executable, or not a program this system can run
+        raise HelperUnavailable(f"the cluster helper ({name}) can't be run: {error}") from None
     if done.returncode != 0:
         said = done.stderr.strip().splitlines()
         detail = f": {said[-1]}" if said else ""

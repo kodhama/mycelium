@@ -1,6 +1,6 @@
 {
   "names": [
-    "hq-lead",
+    "root-lead",
     "t-dev",
     "t-docs",
     "t-lead",
@@ -9,7 +9,7 @@
   "errors": {},
   "slices": {
     "t-lead": {
-      "manager": "hq-lead",
+      "manager": "root-lead",
       "reports": [
         "t-dev",
         "t-docs"
@@ -33,7 +33,7 @@
       "reports": [],
       "peers": []
     },
-    "hq-lead": {
+    "root-lead": {
       "reports": [
         "t-lead"
       ]

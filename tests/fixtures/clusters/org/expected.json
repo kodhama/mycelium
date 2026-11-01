@@ -2,7 +2,7 @@
   "names": [
     "ex-engine-lead-427",
     "hq-dashboard",
-    "hq-lead",
+    "root-lead",
     "mq-pm",
     "mq-roadmap-assistant",
     "scratch-lead"
@@ -10,7 +10,7 @@
   "errors": {},
   "slices": {
     "mq-pm": {
-      "manager": "hq-lead",
+      "manager": "root-lead",
       "known": true,
       "orphan": false,
       "stale": null,
@@ -46,7 +46,7 @@
         ]
       ]
     },
-    "hq-lead": {
+    "root-lead": {
       "manager": "@maintainer",
       "reports": [
         "hq-dashboard",
@@ -55,7 +55,7 @@
       "orphan": false
     },
     "hq-dashboard": {
-      "manager": "hq-lead",
+      "manager": "root-lead",
       "peers": [
         [
           "mq-pm",

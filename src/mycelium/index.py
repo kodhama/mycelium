@@ -43,6 +43,11 @@ HAND_EDITED = (
 )
 
 
+class IndexUnavailable(Exception):
+    """The index's own files can't be used: damaged hold records, or a symlink
+    where mycelium's state or cache folder should be."""
+
+
 @dataclass(frozen=True)
 class Hold:
     """A name that left every cluster (KTD7)."""
@@ -66,7 +71,19 @@ class Hold:
 
     @classmethod
     def from_json(cls, data: Mapping[str, Any]) -> "Hold":
-        return cls(data["name"], data["removed_at"], data["manager"], tuple(data["told"]))
+        name, removed_at, manager, told = (
+            data["name"],
+            data["removed_at"],
+            data["manager"],
+            data["told"],
+        )
+        if not isinstance(name, str) or not isinstance(removed_at, int | float):
+            raise ValueError("a hold needs a name and a removal time")
+        if manager is not None and not isinstance(manager, str):
+            raise ValueError(f"the hold on {name} has a manager that isn't a name")
+        if not isinstance(told, list) or not all(isinstance(item, str) for item in told):
+            raise ValueError(f"the hold on {name} has a told list that isn't names")
+        return cls(name, float(removed_at), manager, tuple(told))
 
 
 @dataclass(frozen=True)
@@ -135,10 +152,12 @@ def refresh(
 ) -> Refresh:
     """The index as the clusters stand now, after one revision check (KTD1).
 
-    Raises clusters.HelperUnavailable when the helper can't answer: the
-    caller says so plainly and never infers "no manager" (R23)."""
+    Raises clusters.HelperUnavailable when the helper can't answer, and
+    IndexUnavailable when the index's own state can't be used: the caller says
+    so plainly and never infers "no manager" (R23)."""
     now = time.time() if now is None else now
-    records = read()
+    read_at = time.time()
+    records = _distinct(read())
     key = _key(records)
     files = _Files(paths)
     cached = files.cached(key)
@@ -147,19 +166,33 @@ def refresh(
     if not records and not files.has_state():
         return Refresh(Index({}, {}, {}), False, ())  # no clusters: write nothing (KTD13)
     with files.locked(lock_wait) as held:
-        cached = files.cached(key)  # another process rebuilt while we waited
+        # Another process may have rebuilt while we waited, from this answer or a later one.
+        cached = files.cached(key, newer_than=read_at)
         if cached is not None:
             return Refresh(cached, False, ())
         # Without the lock, build in memory only: the holder writes, and reports the changes.
-        return _rebuild(files, records, key, now, write=held)
+        return _rebuild(files, records, key, now, read_at, write=held)
+
+
+def _distinct(records: list[clusters.ClusterRecord]) -> list[clusters.ClusterRecord]:
+    """One record per cluster: a home registered under two paths counts once."""
+    seen: set[str] = set()
+    kept = []
+    for record in records:
+        home = os.path.realpath(record.home)
+        if home not in seen:
+            seen.add(home)
+            kept.append(record)
+    return kept
 
 
 def _key(records: list[clusters.ClusterRecord]) -> list[list[Any]]:
-    """What decides a rebuild: each cluster's home, status and revisions."""
+    """What decides a rebuild: each cluster's home, status, reason and revisions."""
     return sorted(
         [
             os.path.realpath(record.home),
             record.status,
+            record.reason,
             record.revision,
             record.stored_revision,
             None if record.instance is None else record.instance.suffix,
@@ -177,7 +210,12 @@ def _problem(record: clusters.ClusterRecord) -> str | None:
 
 
 def _rebuild(
-    files: "_Files", records: list[clusters.ClusterRecord], key, now: float, write: bool
+    files: "_Files",
+    records: list[clusters.ClusterRecord],
+    key,
+    now: float,
+    read_at: float,
+    write: bool,
 ) -> Refresh:
     snapshots = files.snapshots()
     held_before = files.holds()
@@ -187,6 +225,7 @@ def _rebuild(
     ]
     failing: dict[str, list[str]] = {}
     inputs = []
+    opaque = set()  # failing, unreadable and never good: nothing is known of them
     current: dict[str, Declared] = {}
     for home, record in present:
         suffix = None if record.instance is None else record.instance.suffix
@@ -197,11 +236,16 @@ def _rebuild(
             inputs.append(current[home])
             continue
         failing[home] = [problem]
-        if home in snapshots:  # its pointers still place the clusters below it
+        # Its pointers still place the clusters below it, and its names stay known.
+        if home in snapshots:
             snapshot = snapshots[home]
             inputs.append(Declared(home, snapshot["suffix"], snapshot["declaration"]))
+        elif home in current:
+            inputs.append(current[home])
+        else:
+            opaque.add(home)
 
-    graph = build(inputs)
+    graph = build(inputs, opaque=opaque)
     for home, reasons in graph.errors.items():
         failing.setdefault(home, []).extend(reasons)
 
@@ -221,6 +265,10 @@ def _rebuild(
         above = _failing_above(home, graph.parent, failing)
         made = [graph.slices[name] for name in graph.names.get(home, [])]
         for found in made:
+            if above is None and found.orphan and opaque:
+                above = "a cluster that can't be read may point at this one: " + ", ".join(
+                    sorted(opaque)
+                )
             slices[found.name] = found if above is None else _stale(found, above)
         kept[home] = {
             "format": FORMAT,
@@ -235,7 +283,7 @@ def _rebuild(
     errors = {home: tuple(reasons) for home, reasons in failing.items()}
     if not write:
         return Refresh(Index(slices, errors, holds), True, ())
-    files.write(kept, snapshots, holds, held_before, key, slices, errors)
+    files.write(kept, snapshots, holds, held_before, key, read_at, slices, errors)
     return Refresh(Index(slices, errors, holds), True, tuple(changes))
 
 
@@ -291,20 +339,28 @@ class _Files:
     def locked(self, wait: float) -> Iterator[bool]:
         """Hold the rebuild lock, waiting at most `wait` seconds; yields whether it is held."""
         _make_dirs(self.state)
-        descriptor = os.open(self.lock_file, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            descriptor = os.open(self.lock_file, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        except OSError as error:
+            raise IndexUnavailable(f"{self.lock_file} can't be opened: {error}") from None
         try:
             yield _take(descriptor, time.monotonic() + wait)
         finally:
             os.close(descriptor)
 
-    def cached(self, key) -> Index | None:
+    def cached(self, key, newer_than: float | None = None) -> Index | None:
+        """The cached index, when it was built from this answer of the helper's,
+        or (with `newer_than`) from one read later than that time."""
         data = _load(self.cache)
-        if not data or data.get("format") != FORMAT or data.get("key") != key:
+        if not isinstance(data, dict) or data.get("format") != FORMAT:
+            return None
+        later = newer_than is not None and _is_number(data.get("read_at"))
+        if data.get("key") != key and not (later and data["read_at"] > newer_than):
             return None
         try:
             slices = {name: Slice.from_json(item) for name, item in data["slices"].items()}
             errors = {home: tuple(reasons) for home, reasons in data["errors"].items()}
-        except (KeyError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError):
             return None
         return Index(slices, errors, self.holds())
 
@@ -313,31 +369,49 @@ class _Files:
         if self.snapshot_dir.is_dir():
             for path in sorted(self.snapshot_dir.glob("*.json")):
                 data = _load(path)
-                if data and data.get("format") == FORMAT and "home" in data:
+                if _is_snapshot(data):
                     found[data["home"]] = data
         return found
 
     def holds(self) -> dict[str, Hold]:
-        data = _load(self.holds_file) or {}
-        return {item["name"]: Hold.from_json(item) for item in data.get("holds", [])}
+        """The hold records. A damaged file is reported, never read as "no holds"."""
+        try:
+            text = self.holds_file.read_text()
+        except FileNotFoundError:
+            return {}
+        except OSError as error:
+            raise IndexUnavailable(f"{self.holds_file} can't be read: {error}") from None
+        try:
+            data = json.loads(text)
+            if data["format"] != FORMAT:
+                raise ValueError(f"format {data['format']!r}")
+            return {item["name"]: Hold.from_json(item) for item in data["holds"]}
+        except (AttributeError, KeyError, TypeError, ValueError) as error:
+            raise IndexUnavailable(
+                f"{self.holds_file} is damaged ({error!r}); mycelium won't guess who is on hold"
+            ) from None
 
-    def write(self, snapshots, before, holds, held_before, key, slices, errors) -> None:
-        """Write what changed: `before` and `held_before` are what the rebuild read."""
-        wanted = {_snapshot_name(home): data for home, data in snapshots.items()}
-        for home, data in snapshots.items():
+    def write(self, kept, before, holds, held_before, key, read_at, slices, errors) -> None:
+        """Write what changed: `before` and `held_before` are what the rebuild read.
+
+        Holds go first: a snapshot is removed only once the hold it gives rise
+        to is written, so a crash in between can't lose the hold."""
+        if holds != held_before or not self.holds_file.exists():
+            listed = [holds[name].to_json() for name in sorted(holds)]
+            _write(self.holds_file, {"format": FORMAT, "holds": listed})
+        wanted = {_snapshot_name(home) for home in kept}
+        for home, data in kept.items():
             if before.get(home) != data:
                 _write(self.snapshot_dir / _snapshot_name(home), data)
         if self.snapshot_dir.is_dir():
             for path in self.snapshot_dir.glob("*.json"):
                 if path.name not in wanted:
                     path.unlink()
-        if holds != held_before or not self.holds_file.exists():
-            listed = [holds[name].to_json() for name in sorted(holds)]
-            _write(self.holds_file, {"format": FORMAT, "holds": listed})
         _write(
             self.cache,
             {
                 "format": FORMAT,
+                "read_at": read_at,
                 "key": key,
                 "slices": {name: found.to_json() for name, found in slices.items()},
                 "errors": {home: list(reasons) for home, reasons in errors.items()},
@@ -354,6 +428,25 @@ def _take(descriptor: int, deadline: float) -> bool:
             if time.monotonic() >= deadline:
                 return False
             time.sleep(0.02)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _is_snapshot(data: Any) -> bool:
+    if not isinstance(data, dict) or data.get("format") != FORMAT:
+        return False
+    if not isinstance(data.get("home"), str) or not isinstance(data.get("declaration"), dict):
+        return False
+    if data.get("suffix") is not None and not isinstance(data["suffix"], str):
+        return False
+    try:
+        for item in data["slices"]:
+            Slice.from_json(item)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False
+    return True
 
 
 def _snapshot_name(home: str) -> str:
@@ -382,14 +475,25 @@ def _write(path: Path, data: Any) -> None:
 
 
 def _make_dirs(folder: Path) -> None:
-    """Create `folder` and its missing parents, owner-only."""
+    """Create `folder` and its missing parents, owner-only.
+
+    Like the store, the index never follows a symlink below the XDG folder:
+    one anywhere in the path, dangling or not, is refused before anything is
+    created through it."""
+    existing = folder
+    while not os.path.lexists(existing):
+        existing = existing.parent
+    if existing.resolve() != existing or not existing.is_dir():
+        raise IndexUnavailable(
+            f"{folder} is not canonical (a symlink?); mycelium does not follow one"
+        )
     missing = []
-    while not folder.exists():
+    while folder != existing:
         missing.append(folder)
         folder = folder.parent
     for new in reversed(missing):
         try:
             new.mkdir(mode=0o700)
         except FileExistsError:
-            continue
+            continue  # another process made it a moment ago
         new.chmod(0o700)

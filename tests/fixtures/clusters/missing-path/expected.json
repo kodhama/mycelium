@@ -1,7 +1,7 @@
 {
   "names": [
-    "hq-lead",
-    "hq-ops",
+    "root-lead",
+    "root-ops",
     "t-lead"
   ],
   "errors": {
@@ -11,12 +11,12 @@
     ]
   },
   "slices": {
-    "hq-lead": {
+    "root-lead": {
       "known": false,
       "stale": "repos/gone"
     },
     "t-lead": {
-      "manager": "hq-lead",
+      "manager": "root-lead",
       "known": true,
       "stale": "repos/gone"
     }

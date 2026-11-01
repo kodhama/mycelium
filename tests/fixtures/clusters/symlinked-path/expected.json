@@ -1,21 +1,21 @@
 {
   "names": [
     "a-lead",
-    "hq-lead",
-    "hq-ops"
+    "root-lead",
+    "root-ops"
   ],
   "errors": {},
   "slices": {
     "a-lead": {
-      "manager": "hq-ops",
+      "manager": "root-ops",
       "stale": null
     },
-    "hq-lead": {
+    "root-lead": {
       "reports": [
-        "hq-ops"
+        "root-ops"
       ]
     },
-    "hq-ops": {
+    "root-ops": {
       "reports": [
         "a-lead"
       ]

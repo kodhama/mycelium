@@ -33,7 +33,7 @@ def test_each_fixture_gives_its_defined_result(tree, case):
 
     index = refresh(found.paths, read=found.read).index
 
-    assert sorted(index.names()) == expected["names"]
+    assert sorted(index.names()) == sorted(expected["names"])
     errors = {found.relative(home): reasons for home, reasons in index.errors().items()}
     assert sorted(errors) == sorted(expected["errors"])
     for home, wanted in expected["errors"].items():
@@ -117,7 +117,7 @@ def test_an_unknown_event_kind_is_a_warning_on_the_subscriber_only(tree):
 
 def test_two_clusters_declaring_one_effective_name_both_fail(tree):
     found = tree("unpointed")
-    found.edit("hq/lone", 'name = "lone-dev"', 'name = "hq-lead"')
+    found.edit("hq/lone", 'name = "lone-dev"', 'name = "root-lead"')
     index = refresh(found.paths, read=found.read).index
     assert found.home("hq") in index.errors()
     assert found.home("hq/lone") in index.errors()
@@ -136,10 +136,10 @@ def test_a_link_to_a_declared_name_matches_every_instance(tree):
     found.edit(
         "hq",
         'reports_at = ["repos/*"]',
-        'reports_at = ["repos/*"]\n\n[[link]]\nkind = "interested"\nfrom = "hq-lead"\n'
+        'reports_at = ["repos/*"]\n\n[[link]]\nkind = "interested"\nfrom = "root-lead"\n'
         'to = "app-lead"\nevents = ["done"]',
     )
     index = refresh(found.paths, read=found.read).index
-    follows = [party.name for party in index.slice("hq-lead").follows]
+    follows = [party.name for party in index.slice("root-lead").follows]
     assert follows == ["app-lead-101", "app-lead-102"]
-    assert [party.name for party in index.slice("app-lead-102").interested] == ["hq-lead"]
+    assert [party.name for party in index.slice("app-lead-102").interested] == ["root-lead"]

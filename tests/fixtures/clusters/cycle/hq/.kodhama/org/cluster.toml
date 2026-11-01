@@ -1,9 +1,9 @@
-revision = "sha256:75807d98239ba70928685f5ca367b7e8a9c330ba3dd45ecd8ab85fe19dc151c5"
+revision = "sha256:8dec1b87d31f2bcbd93b80336ad2ae60b5d12e04e1b30e5dfac24b47145f4ef2"
 schema = 1
 
 [[agent]]
-name = "hq-lead"
+name = "root-lead"
 role = "grove:manager"
 manager = "@maintainer"
 run = "running"
-mission = "hq-lead work"
+mission = "root-lead work"

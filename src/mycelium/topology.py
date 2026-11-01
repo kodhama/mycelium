@@ -147,9 +147,13 @@ class _Agent:
     exclude: list[str]
 
 
-def build(declared: Iterable[Declared]) -> Graph:
-    """The graph over every declaration, with each validation failure on its cluster."""
-    return _Builder(list(declared)).build()
+def build(declared: Iterable[Declared], opaque: Iterable[str] = ()) -> Graph:
+    """The graph over every declaration, with each validation failure on its cluster.
+
+    `opaque` names registered homes whose declaration can't be read: a pointer
+    to one is valid, and a link to a name no readable cluster declares can't
+    be checked while one exists, so it becomes a warning, not an error."""
+    return _Builder(list(declared), frozenset(opaque)).build()
 
 
 def unknown(cluster: Declared, reason: str) -> list[Slice]:
@@ -176,11 +180,12 @@ def _slice(agent: _Agent, **rest: Any) -> Slice:
 
 
 class _Builder:
-    def __init__(self, declared: list[Declared]) -> None:
+    def __init__(self, declared: list[Declared], opaque: frozenset[str]) -> None:
         self.declared = declared
+        self.opaque = opaque
         self.graph = Graph()
         self.agents: dict[str, _Agent] = {}
-        self.homes = {cluster.home for cluster in declared}
+        self.homes = {cluster.home for cluster in declared} | opaque
         self.manager: dict[str, str | None] = {}
         self.owner: dict[str, str] = {}  # pointed cluster's home -> the pointing agent
         self.roots: set[str] = set()
@@ -372,6 +377,11 @@ class _Builder:
                 continue
             source = self.local[(home, source)]
             targets = [MAINTAINER] if target == MAINTAINER else self.matches(target)
+            if not targets and self.opaque:
+                self.warnings[source].append(
+                    f"{label} can't be checked: no readable cluster declares {target}"
+                )
+                continue
             if not targets:
                 self.fail(home, f"{label}: no registered cluster declares {target}")
                 continue
@@ -424,17 +434,15 @@ class _Builder:
         return False
 
     def make_slices(self) -> None:
-        reports: dict[str, list[str]] = defaultdict(list)
+        under: dict[str, list[str]] = defaultdict(list)  # manager -> its reports
         for name, manager in self.manager.items():
-            if manager in self.agents:
-                reports[manager].append(name)
+            if manager is not None:
+                under[manager].append(name)
         for agent in self.agents.values():
             manager = self.manager.get(agent.name)
             near: dict[str, str | None] = {}
             if manager is not None:
-                for other, theirs in self.manager.items():
-                    if theirs == manager and other != agent.name:
-                        near[other] = None
+                near = {other: None for other in under[manager] if other != agent.name}
             for pair, topic in self.peers.items():
                 if agent.name in pair and len(pair) == 2:
                     (other,) = pair - {agent.name}
@@ -444,7 +452,7 @@ class _Builder:
                 manager=manager,
                 known=True,
                 orphan=not self.reached(agent.home),
-                reports=tuple(sorted(reports[agent.name])),
+                reports=tuple(sorted(under[agent.name])),
                 peers=tuple(Peer(name, near[name]) for name in sorted(near)),
                 interested=tuple(sorted(self.interested[agent.name], key=_party_key)),
                 follows=tuple(sorted(self.follows[agent.name], key=_party_key)),

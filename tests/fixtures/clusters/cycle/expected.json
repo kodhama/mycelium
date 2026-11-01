@@ -1,6 +1,6 @@
 {
   "names": [
-    "hq-lead",
+    "root-lead",
     "x-lead",
     "y-lead",
     "z-lead"
@@ -29,7 +29,7 @@
       "known": false,
       "stale": "points at itself"
     },
-    "hq-lead": {
+    "root-lead": {
       "stale": null,
       "reports": []
     }

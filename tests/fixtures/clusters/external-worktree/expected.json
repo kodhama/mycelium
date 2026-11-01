@@ -2,12 +2,12 @@
   "names": [
     "app-lead-101",
     "app-lead-102",
-    "hq-lead"
+    "root-lead"
   ],
   "errors": {},
   "slices": {
     "app-lead-101": {
-      "manager": "hq-lead",
+      "manager": "root-lead",
       "orphan": false,
       "stale": null
     },

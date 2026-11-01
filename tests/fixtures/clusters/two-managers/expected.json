@@ -1,8 +1,8 @@
 {
   "names": [
     "a-lead",
-    "hq-lead",
-    "hq-ops"
+    "root-lead",
+    "root-ops"
   ],
   "errors": {
     "hq/repos/a": [

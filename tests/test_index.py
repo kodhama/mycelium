@@ -7,8 +7,9 @@ import time
 
 import pytest
 
+from mycelium import index as index_module
 from mycelium.clusters import HelperUnavailable
-from mycelium.index import HAND_EDITED, HOLD_SECONDS, Change, refresh
+from mycelium.index import HAND_EDITED, HOLD_SECONDS, Change, IndexUnavailable, refresh
 
 
 def slices(index):
@@ -38,7 +39,7 @@ def test_the_first_build_reports_every_name_as_added(tree):
     found = tree("internal-reports")
     changes = refresh(found.paths, read=found.read).changes
     assert {change.name for change in changes if change.kind == "added"} == {
-        "hq-lead",
+        "root-lead",
         "t-dev",
         "t-docs",
         "t-lead",
@@ -76,7 +77,7 @@ def test_a_hand_edit_keeps_the_last_good_entry_marked_stale(tree):
     mq_pm = index.slice("mq-pm")
     assert mq_pm.stale is not None and "edited by hand" in mq_pm.stale
     assert mq_pm.mission == "mq-pm work"  # the last good entry, not the edit
-    assert mq_pm.manager == "hq-lead"
+    assert mq_pm.manager == "root-lead"
     assert mq_pm.known
     # The clusters it points at are still placed under it, stale through it.
     engine = index.slice("ex-engine-lead-427")
@@ -171,12 +172,12 @@ def test_a_moved_checkout_keeps_its_names_and_raises_no_hold(tree):
 
 def test_a_validation_failure_never_makes_a_name_held(tree):
     found = tree("two-managers")
-    found.edit("hq", 'reports_at = ["repos/a"]\n', "", seal=True)  # only hq-ops points: valid
-    assert refresh(found.paths, read=found.read).index.manager("a-lead") == "hq-ops"
+    found.edit("hq", 'reports_at = ["repos/a"]\n', "", seal=True)  # only root-ops points: valid
+    assert refresh(found.paths, read=found.read).index.manager("a-lead") == "root-ops"
     found.edit("hq", 'manager = "@maintainer"', 'manager = "@maintainer"\nreports_at = ["repos/a"]')
     index = refresh(found.paths, read=found.read).index
     assert index.holds() == ()
-    assert index.slice("a-lead").manager == "hq-ops"  # its last good entry
+    assert index.slice("a-lead").manager == "root-ops"  # its last good entry
     assert "two explicit paths" in index.slice("a-lead").stale
 
 
@@ -226,3 +227,112 @@ def test_a_held_rebuild_lock_never_makes_a_caller_wait_past_its_bound(tree):
     assert result.index.run("ex-engine-lead-427") == "parked"
     assert result.changes == ()  # the holder of the lock reports them
     assert (found.paths.cache / "index.json").read_text() == cache
+
+
+def test_a_hand_edit_with_no_last_good_entry_doesnt_fail_the_clusters_around_it(tree):
+    found = tree("org")
+    found.edit("hq/mq", 'mission = "mq-pm work"', 'mission = "changed by hand"', seal=False)
+    index = refresh(found.paths, read=found.read).index
+    assert list(index.errors()) == [found.home("hq/mq")]
+    assert index.slice("root-lead").known
+    assert index.slice("root-lead").stale is None
+    engine = index.slice("ex-engine-lead-427")
+    assert engine.manager == "mq-pm"
+    assert engine.stale is not None and "above this one" in engine.stale
+
+
+def test_an_unreadable_cluster_with_no_last_good_entry_leaves_the_rest_stale_not_wrong(tree):
+    found = tree("org")
+    found.toml("hq/mq").write_text("this is not toml = = =\n")
+    index = refresh(found.paths, read=found.read).index
+    assert list(index.errors()) == [found.home("hq/mq")]
+    assert index.slice("root-lead").known
+    assert any("can't be checked" in w for w in index.slice("hq-dashboard").warnings)
+    engine = index.slice("ex-engine-lead-427")
+    assert engine.manager is None
+    assert engine.stale is not None and "can't be read" in engine.stale
+
+
+def test_a_crash_while_writing_never_loses_a_hold(tree, monkeypatch):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    shutil.rmtree(found.root / "hq/mq/repos/engine")
+    real = index_module._write
+
+    def crash_on_holds(path, data):
+        if path.name == "holds.json":
+            raise OSError("killed")
+        real(path, data)
+
+    monkeypatch.setattr(index_module, "_write", crash_on_holds)
+    with pytest.raises(OSError):
+        refresh(found.paths, read=found.read)
+    monkeypatch.setattr(index_module, "_write", real)
+    assert refresh(found.paths, read=found.read).index.hold("ex-engine-lead-427").manager == "mq-pm"
+
+
+def test_one_cluster_registered_under_two_paths_counts_once(tree):
+    found = tree("internal-reports")
+    os.symlink(found.root / "hq/team", found.root / "team-alias")
+    with (found.root / "registry").open("a") as registry:
+        registry.write("team-alias\n")
+    index = refresh(found.paths, read=found.read).index
+    assert index.errors() == {}
+    assert index.manager("t-lead") == "root-lead"
+
+
+def test_a_damaged_cache_or_snapshot_is_rebuilt_from_the_clusters(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    (found.paths.cache / "index.json").write_text("[]")
+    for path in (found.paths.state / "index" / "last-good").glob("*.json"):
+        path.write_text('{"format": 1, "home": "x"}')
+    index = refresh(found.paths, read=found.read).index
+    assert index.manager("mq-pm") == "root-lead"
+
+
+def test_damaged_hold_records_are_reported_never_dropped(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    (found.paths.state / "index" / "holds.json").write_text('{"format": 1, "holds": [{}]}')
+    with pytest.raises(IndexUnavailable, match="holds.json"):
+        refresh(found.paths, read=found.read)
+
+
+def test_a_symlink_below_the_xdg_folder_is_refused(tree):
+    found = tree("org")
+    elsewhere = found.root.parent / "elsewhere"
+    elsewhere.mkdir()
+    found.paths.state.parent.mkdir(parents=True)
+    os.symlink(elsewhere, found.paths.state)
+    with pytest.raises(IndexUnavailable, match="symlink"):
+        refresh(found.paths, read=found.read)
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_records_read_before_a_newer_rebuild_never_overwrite_it(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+
+    def read_then_lose_the_race():
+        old = found.read()
+        shutil.rmtree(found.root / "hq/mq/repos/engine")
+        refresh(found.paths, read=found.read)  # another process, reading later
+        return old
+
+    late = refresh(found.paths, read=read_then_lose_the_race)
+    assert not late.rebuilt
+    assert late.index.hold("ex-engine-lead-427") is not None
+    again = refresh(found.paths, read=found.read)
+    assert again.index.hold("ex-engine-lead-427") is not None
+    assert again.changes == ()
+
+
+def test_a_new_reason_for_an_unreadable_cluster_is_shown(tree):
+    found = tree("org")
+    found.toml("hq/mq").write_text("this is not toml = = =\n")
+    first = refresh(found.paths, read=found.read).index.errors()[found.home("hq/mq")]
+    found.toml("hq/mq").write_text("schema = 9\n")
+    second = refresh(found.paths, read=found.read).index.errors()[found.home("hq/mq")]
+    assert first != second
+    assert "schema" in second[0]

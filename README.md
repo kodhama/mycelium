@@ -78,7 +78,8 @@ decision, and rebuilds the index when any cluster's revision changes.
 - **A checkout whose folder is gone puts its names on hold** for 7 days, with
   their last-known manager.
 - **The index in the cache can be deleted at any time.** The last-good
-  snapshots and hold records it can't rebuild live in state.
+  snapshots and hold records it can't rebuild live in state. Damaged hold
+  records stop the index with an error, never an empty list.
 
 ## What the store survives
 

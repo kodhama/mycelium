@@ -2,8 +2,8 @@
   "names": [
     "a-dev",
     "a-lead",
-    "hq-lead",
-    "hq-ops"
+    "root-lead",
+    "root-ops"
   ],
   "errors": {
     "hq/repos/a": [
@@ -21,13 +21,13 @@
       "known": false,
       "stale": "two globs reach it"
     },
-    "hq-lead": {
+    "root-lead": {
       "reports": [
-        "hq-ops"
+        "root-ops"
       ],
       "stale": null
     },
-    "hq-ops": {
+    "root-ops": {
       "reports": [],
       "stale": null
     }

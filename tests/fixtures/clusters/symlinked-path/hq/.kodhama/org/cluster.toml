@@ -1,18 +1,18 @@
-revision = "sha256:092a6892020dd92d036c613a43f7a907e03cf191566bf0a97e0a26b581e3e39a"
+revision = "sha256:37334dcb82af5bfb993c5e30932765357e04daaadd610d50a86e98d644884133"
 schema = 1
 
 [[agent]]
-name = "hq-lead"
+name = "root-lead"
 role = "grove:manager"
 manager = "@maintainer"
 run = "running"
-mission = "hq-lead work"
+mission = "root-lead work"
 reports_at = ["repos/*"]
 
 [[agent]]
-name = "hq-ops"
+name = "root-ops"
 role = "grove:manager"
-manager = "hq-lead"
+manager = "root-lead"
 run = "running"
-mission = "hq-ops work"
+mission = "root-ops work"
 reports_at = ["linked"]
