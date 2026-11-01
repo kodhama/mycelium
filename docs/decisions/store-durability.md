@@ -69,15 +69,18 @@ on a database file drops every POSIX lock the process holds on it, a
 connection's included
 ([How To Corrupt An SQLite Database File](https://sqlite.org/howtocorrupt.html),
 section 2.2). Opening the store therefore checks for symlinks with `lstat`
-and tightens modes with `chmod` by path. It never opens a store file itself:
-SQLite creates a missing one, and its mode is tightened before anything is
-written to it. Until then the new file is empty and has SQLite's default
-mode (0644 under the usual umask); inside a folder only its owner can enter,
-which mycelium makes its own folders, no one else can open it. A test holds the write lock in one process, opens the store
-there, and checks that another process is still kept out. Two threads making
-the first open at once raced on a descriptor of mycelium's own; with none
-left, there is no window to test, so a test checks instead that opening the
-store opens no descriptor on its files.
+and tightens modes with `chmod` by path. An existing file is tightened
+before the connection opens, since SQLite opens a file it cannot write
+read-only. mycelium never opens a store file itself: SQLite creates a
+missing one, and its mode is tightened before anything is written to it.
+Until then the new file is empty and has SQLite's default mode (0644 under
+the usual umask). Inside a folder only its owner can enter, as every folder
+mycelium creates is, no one else can open it. A test holds the write lock in
+one process, opens the store there, and checks that another process is
+still kept out. Two threads making the first open at once raced on a
+descriptor of mycelium's own; with none left, there is no window to test,
+so a test checks instead that opening the store opens no descriptor on its
+files.
 
 **What would change it.** If a later unit needs mail to survive power loss,
 turn on `fullfsync` and record the measured cost in a new dated entry here.

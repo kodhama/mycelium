@@ -519,3 +519,14 @@ def test_opening_the_store_opens_no_descriptor_on_its_files(tmp_path, monkeypatc
     open_store(path).close()
     open_store(path).close()
     assert [name for name in opened if os.path.basename(name).startswith(path.name)] == []
+
+
+def test_an_existing_read_only_store_is_tightened_before_it_is_opened(tmp_path):
+    # SQLite opens a file it cannot write read-only, and says so only on a write.
+    path = tmp_path / "store.sqlite3"
+    open_store(path).close()
+    path.chmod(0o400)
+    store = open_store(path)
+    store.append("role-01", "hello")
+    store.close()
+    assert path.stat().st_mode & 0o777 == 0o600

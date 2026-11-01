@@ -48,12 +48,15 @@ class SqliteStore:
         # Refuse a newer file before anything here can write to it (but for a
         # hot rollback journal, which the read-write open must roll back first).
         _refuse_newer_schema(path)
+        # Before connecting: SQLite opens a file it cannot write read-only.
+        _check_store_files(path, tighten=True)
         # isolation_level=None: no implicit transactions; each one below is explicit.
         # SQLite creates a missing file, so this process never holds a descriptor
         # of its own on it (see _check_store_files).
         self._db = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS, isolation_level=None)
         try:
-            # Before anything is written: a new file is empty until the schema.
+            # Again for a file SQLite just created, before anything is written:
+            # it is empty until the schema.
             _check_store_files(path, tighten=True)
             self._create_schema()
             self._use_wal()
