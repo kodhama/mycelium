@@ -53,6 +53,18 @@ class Hold:
     def ended(self, now: float) -> bool:
         return now >= self.removed_at + HOLD_SECONDS
 
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "removed_at": self.removed_at,
+            "manager": self.manager,
+            "told": list(self.told),
+        }
+
+    @classmethod
+    def from_json(cls, data: Mapping[str, Any]) -> "Hold":
+        return cls(data["name"], data["removed_at"], data["manager"], tuple(data["told"]))
+
 
 @dataclass(frozen=True)
 class Change:
@@ -157,13 +169,15 @@ def _problem(record: clusters.ClusterRecord) -> str | None:
 
 def _rebuild(files: "_Files", records: list[clusters.ClusterRecord], key, now: float) -> Refresh:
     snapshots = files.snapshots()
-    holds = files.holds()
-    present = [record for record in records if record.status != "missing"]
-    problems: dict[str, list[str]] = {}
+    held_before = files.holds()
+    holds = dict(held_before)
+    present = [
+        (os.path.realpath(record.home), record) for record in records if record.status != "missing"
+    ]
+    failing: dict[str, list[str]] = {}
     inputs = []
     current: dict[str, Declared] = {}
-    for record in present:
-        home = os.path.realpath(record.home)
+    for home, record in present:
         suffix = None if record.instance is None else record.instance.suffix
         if record.status == "ok":
             current[home] = Declared(home, suffix, record.declaration or {})
@@ -171,20 +185,18 @@ def _rebuild(files: "_Files", records: list[clusters.ClusterRecord], key, now: f
         if problem is None:
             inputs.append(current[home])
             continue
-        problems[home] = [problem]
+        failing[home] = [problem]
         if home in snapshots:  # its pointers still place the clusters below it
             snapshot = snapshots[home]
             inputs.append(Declared(home, snapshot["suffix"], snapshot["declaration"]))
 
     graph = build(inputs)
-    failing = {home: list(reasons) for home, reasons in problems.items()}
     for home, reasons in graph.errors.items():
         failing.setdefault(home, []).extend(reasons)
 
     slices: dict[str, Slice] = {}
     kept: dict[str, dict[str, Any]] = {}
-    for record in present:
-        home = os.path.realpath(record.home)
+    for home, record in present:
         if home in failing:
             reason = "; ".join(failing[home])
             if home in snapshots:
@@ -210,7 +222,7 @@ def _rebuild(files: "_Files", records: list[clusters.ClusterRecord], key, now: f
 
     changes = _changes(snapshots, slices, holds, now)
     errors = {home: tuple(reasons) for home, reasons in failing.items()}
-    files.write(kept, holds, key, slices, errors)
+    files.write(kept, snapshots, holds, held_before, key, slices, errors)
     return Refresh(Index(slices, errors, holds), True, tuple(changes))
 
 
@@ -294,38 +306,21 @@ class _Files:
 
     def holds(self) -> dict[str, Hold]:
         data = _load(self.holds_file) or {}
-        return {
-            item["name"]: Hold(
-                item["name"], item["removed_at"], item["manager"], tuple(item["told"])
-            )
-            for item in data.get("holds", [])
-        }
+        return {item["name"]: Hold.from_json(item) for item in data.get("holds", [])}
 
-    def write(self, snapshots, holds: Mapping[str, Hold], key, slices, errors) -> None:
+    def write(self, snapshots, before, holds, held_before, key, slices, errors) -> None:
+        """Write what changed: `before` and `held_before` are what the rebuild read."""
         wanted = {_snapshot_name(home): data for home, data in snapshots.items()}
-        for name, data in wanted.items():
-            path = self.snapshot_dir / name
-            if _load(path) != data:
-                _write(path, data)
+        for home, data in snapshots.items():
+            if before.get(home) != data:
+                _write(self.snapshot_dir / _snapshot_name(home), data)
         if self.snapshot_dir.is_dir():
             for path in self.snapshot_dir.glob("*.json"):
                 if path.name not in wanted:
                     path.unlink()
-        _write(
-            self.holds_file,
-            {
-                "format": FORMAT,
-                "holds": [
-                    {
-                        "name": hold.name,
-                        "removed_at": hold.removed_at,
-                        "manager": hold.manager,
-                        "told": list(hold.told),
-                    }
-                    for hold in (holds[name] for name in sorted(holds))
-                ],
-            },
-        )
+        if holds != held_before or not self.holds_file.exists():
+            listed = [holds[name].to_json() for name in sorted(holds)]
+            _write(self.holds_file, {"format": FORMAT, "holds": listed})
         _write(
             self.cache,
             {

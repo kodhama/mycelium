@@ -156,14 +156,14 @@ def unknown(cluster: Declared, reason: str) -> list[Slice]:
     """Slices that name a failing cluster's agents and say nothing else is known."""
     slices = []
     for raw in _entries(cluster.declaration, "agent"):
-        if isinstance(raw, dict) and _is_name(raw.get("name")):
-            agent, _ = _agent(raw, cluster)
-            if agent is not None:
-                slices.append(_unknown_slice(agent, reason))
+        agent, _ = _agent(raw, cluster)
+        if agent is not None:
+            slices.append(_slice(agent, manager=None, known=False, orphan=False, stale=reason))
     return slices
 
 
-def _unknown_slice(agent: _Agent, reason: str) -> Slice:
+def _slice(agent: _Agent, **rest: Any) -> Slice:
+    """A slice carrying the agent's own fields, plus what the caller knows of the org."""
     return Slice(
         name=agent.name,
         declared_name=agent.declared,
@@ -171,10 +171,7 @@ def _unknown_slice(agent: _Agent, reason: str) -> Slice:
         role=agent.role,
         run=agent.run,
         mission=agent.mission,
-        manager=None,
-        known=False,
-        orphan=False,
-        stale=reason,
+        **rest,
     )
 
 
@@ -188,6 +185,12 @@ class _Builder:
         self.owner: dict[str, str] = {}  # pointed cluster's home -> the pointing agent
         self.roots: set[str] = set()
         self.warnings: dict[str, list[str]] = defaultdict(list)
+        # (home, declared name) -> effective name, once every agent is read.
+        self.local: dict[tuple[str, str], str] = {}
+        self.peers: dict[frozenset[str], str] = {}
+        self.interested: dict[str, list[Party]] = defaultdict(list)
+        self.follows: dict[str, list[Party]] = defaultdict(list)
+        self.escalation: dict[str, list[Route]] = defaultdict(list)
 
     def fail(self, home: str, reason: str) -> None:
         self.graph.errors.setdefault(home, []).append(reason)
@@ -202,8 +205,8 @@ class _Builder:
                 owner = self.owner.get(home)
                 self.manager[head] = owner
         self.check_ancestors()
-        peers, interested, follows, escalation = self.read_links(links)
-        self.make_slices(peers, interested, follows, escalation)
+        self.read_links(links)
+        self.make_slices()
         return self.graph
 
     def read_agents(self) -> list[tuple[str, Any]]:
@@ -214,7 +217,7 @@ class _Builder:
             for raw in _entries(cluster.declaration, "agent"):
                 agent, problem = _agent(raw, cluster)
                 if agent is None:
-                    self.fail(cluster.home, problem)
+                    self.fail(cluster.home, problem or "an agent can't be read")
                     continue
                 if agent.declared in seen:
                     self.fail(cluster.home, f"agent {agent.declared} is declared twice")
@@ -227,9 +230,10 @@ class _Builder:
                     if other != cluster.home:
                         self.fail(other, reason)
                     continue
-                if problem:
+                if problem is not None:
                     self.fail(cluster.home, problem)
                 self.agents[agent.name] = agent
+                self.local[(cluster.home, agent.declared)] = agent.name
                 names.append(agent.name)
             links.extend((cluster.home, raw) for raw in _entries(cluster.declaration, "link"))
             for problem in _shape_problems(cluster.declaration):
@@ -237,7 +241,6 @@ class _Builder:
         return links
 
     def in_cluster_managers(self) -> None:
-        by_declared = {(agent.home, agent.declared): agent.name for agent in self.agents.values()}
         for agent in self.agents.values():
             if agent.manager == "":
                 self.manager[agent.name] = None  # a head: set once pointers resolve
@@ -247,8 +250,8 @@ class _Builder:
             elif agent.manager == agent.declared:
                 self.fail(agent.home, f"{agent.declared} is its own manager")
                 self.manager[agent.name] = None
-            elif (agent.home, agent.manager) in by_declared:
-                self.manager[agent.name] = by_declared[(agent.home, agent.manager)]
+            elif (agent.home, agent.manager) in self.local:
+                self.manager[agent.name] = self.local[(agent.home, agent.manager)]
             else:
                 reason = (
                     f"{agent.declared}'s manager {agent.manager} is not an agent in this cluster"
@@ -266,6 +269,8 @@ class _Builder:
     def resolve_pointers(self) -> None:
         claims: dict[str, list[tuple[str, bool]]] = defaultdict(list)
         for agent in self.agents.values():
+            if not agent.reports_at:
+                continue
             excluded = set()
             for entry in agent.exclude:
                 excluded.update(_expand(agent.home, entry))
@@ -350,13 +355,8 @@ class _Builder:
             return [name]
         return sorted(agent.name for agent in self.agents.values() if agent.declared == name)
 
-    def read_links(self, links: list[tuple[str, Any]]):
-        peers: dict[frozenset[str], str] = {}
-        interested: dict[str, list[Party]] = defaultdict(list)
-        follows: dict[str, list[Party]] = defaultdict(list)
-        escalation: dict[str, list[Route]] = defaultdict(list)
+    def read_links(self, links: list[tuple[str, Any]]) -> None:
         escalates: set[tuple[str, str]] = set()
-        local = {(agent.home, agent.declared): agent.name for agent in self.agents.values()}
         for home, raw in links:
             if not isinstance(raw, dict) or raw.get("kind") not in LINK_KINDS:
                 kind = raw.get("kind") if isinstance(raw, dict) else raw
@@ -364,13 +364,13 @@ class _Builder:
                 continue
             kind, source, target = raw["kind"], raw.get("from"), raw.get("to")
             label = f"the {kind} link from {source} to {target}"
-            if not _is_name(source) or (home, source) not in local:
+            if not _is_name(source) or (home, source) not in self.local:
                 self.fail(home, f"{label}: from names no agent in this cluster")
                 continue
             if not _is_name(target):
                 self.fail(home, f"{label}: to is not a name")
                 continue
-            source = local[(home, source)]
+            source = self.local[(home, source)]
             targets = [MAINTAINER] if target == MAINTAINER else self.matches(target)
             if not targets:
                 self.fail(home, f"{label}: no registered cluster declares {target}")
@@ -382,10 +382,10 @@ class _Builder:
                     continue
                 for other in targets:
                     pair = frozenset((source, other))
-                    if pair in peers:
+                    if pair in self.peers:
                         self.fail(home, f"{label}: that pair already has a peer link")
                         continue
-                    peers[pair] = topic
+                    self.peers[pair] = topic
             elif kind == "interested":
                 events = _words(raw.get("events"))
                 if not events:
@@ -397,8 +397,8 @@ class _Builder:
                         f"{label} names event kinds mycelium doesn't know: {', '.join(strange)}"
                     )
                 for other in targets:
-                    follows[source].append(Party(other, events))
-                    interested[other].append(Party(source, events))
+                    self.follows[source].append(Party(other, events))
+                    self.interested[other].append(Party(source, events))
             else:
                 when = _words(raw.get("when"))
                 if not when:
@@ -410,8 +410,7 @@ class _Builder:
                     continue
                 escalates.update((source, value) for value in when)
                 for other in targets:
-                    escalation[source].append(Route(other, when))
-        return peers, interested, follows, escalation
+                    self.escalation[source].append(Route(other, when))
 
     def reached(self, home: str) -> bool:
         seen = set()
@@ -424,7 +423,7 @@ class _Builder:
             home = self.graph.parent[home]
         return False
 
-    def make_slices(self, peers, interested, follows, escalation) -> None:
+    def make_slices(self) -> None:
         reports: dict[str, list[str]] = defaultdict(list)
         for name, manager in self.manager.items():
             if manager in self.agents:
@@ -436,25 +435,20 @@ class _Builder:
                 for other, theirs in self.manager.items():
                     if theirs == manager and other != agent.name:
                         near[other] = None
-            for pair, topic in peers.items():
+            for pair, topic in self.peers.items():
                 if agent.name in pair and len(pair) == 2:
                     (other,) = pair - {agent.name}
                     near[other] = topic
-            self.graph.slices[agent.name] = Slice(
-                name=agent.name,
-                declared_name=agent.declared,
-                home=agent.home,
-                role=agent.role,
-                run=agent.run,
-                mission=agent.mission,
+            self.graph.slices[agent.name] = _slice(
+                agent,
                 manager=manager,
                 known=True,
                 orphan=not self.reached(agent.home),
                 reports=tuple(sorted(reports[agent.name])),
                 peers=tuple(Peer(name, near[name]) for name in sorted(near)),
-                interested=tuple(sorted(interested[agent.name], key=_party_key)),
-                follows=tuple(sorted(follows[agent.name], key=_party_key)),
-                escalation=tuple(escalation[agent.name]),
+                interested=tuple(sorted(self.interested[agent.name], key=_party_key)),
+                follows=tuple(sorted(self.follows[agent.name], key=_party_key)),
+                escalation=tuple(self.escalation[agent.name]),
                 warnings=tuple(self.warnings[agent.name]),
             )
 
@@ -463,8 +457,8 @@ def _party_key(party: Party) -> tuple[str, tuple[str, ...]]:
     return party.name, party.events
 
 
-def _agent(raw: Any, cluster: Declared) -> tuple[_Agent | None, str]:
-    """The agent an `[[agent]]` entry declares, and the first problem with it."""
+def _agent(raw: Any, cluster: Declared) -> tuple[_Agent | None, str | None]:
+    """The agent an `[[agent]]` entry declares, and the first problem with it, if any."""
     if not isinstance(raw, dict) or not _is_name(raw.get("name")):
         return None, "an agent has no name"
     declared = raw["name"]
@@ -497,7 +491,7 @@ def _agent(raw: Any, cluster: Declared) -> tuple[_Agent | None, str]:
     )
     if not isinstance(cwd, str) or not _inside(cluster.home, cwd):
         return agent, f"agent {declared}: cwd {cwd!r} leaves the home"
-    return agent, ""
+    return agent, None
 
 
 def _shape_problems(declaration: Mapping[str, Any]) -> list[str]:
