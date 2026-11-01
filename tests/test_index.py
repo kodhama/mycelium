@@ -483,3 +483,88 @@ def test_a_cluster_registered_between_two_calls_is_routable_on_the_second(tree):
     assert found_slice is not None and found_slice.known and found_slice.orphan
     assert found_slice.stale is None
     assert Change("added", "new-lead") in result.changes
+
+
+# Floor review of the round-1 fix (a2d7eb7).
+
+
+def seal(found, relative):
+    subprocess.run([sys.executable, str(FAKE), "seal", str(found.toml(relative))], check=True)
+
+
+def test_an_error_only_a_rejected_declaration_caused_doesnt_outlive_the_fallback(tree):
+    found = tree("org")
+    found.edit("hq/mq", 'reports_at = ["repos/*"]', 'reports_at = ["repos/engine"]')
+    refresh(found.paths, read=found.read)
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mq", "mqq", "mq/repos/engine"]')
+    result = refresh(found.paths, read=found.read)
+    assert list(result.index.errors()) == [found.home("hq")]
+    engine = result.index.slice("ex-engine-lead-427")
+    assert (engine.manager, engine.known) == ("mq-pm", True)
+    assert engine.stale is not None and "above" in engine.stale
+
+
+def test_a_child_with_no_last_good_keeps_its_place_below_a_fallback(tree):
+    found = tree("org")
+    found.edit("hq/mq", 'reports_at = ["repos/*"]', 'reports_at = ["repos/engine"]')
+    registry = found.root / "registry"
+    registry.write_text("hq\nhq/mq\nhq/mq/repos/scratch\n")
+    refresh(found.paths, read=found.read)
+    registry.write_text("hq\nhq/mq\nhq/mq/repos/engine\nhq/mq/repos/scratch\n")
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mq", "mqq", "mq/repos/engine"]')
+    engine = refresh(found.paths, read=found.read).index.slice("ex-engine-lead-427")
+    assert (engine.manager, engine.known) == ("mq-pm", True)
+
+
+def test_a_manager_change_made_while_stale_is_reported_once_current(tree):
+    found = tree("org")
+    with found.toml("hq/mq/repos/engine").open("a") as handle:
+        handle.write('\n[[agent]]\nname = "eng-dev"\nmanager = "ex-engine-lead"\nmission = "d"\n')
+    seal(found, "hq/mq/repos/engine")
+    refresh(found.paths, read=found.read)
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')
+    found.edit("hq/mq/repos/engine", 'manager = "ex-engine-lead"', 'manager = ""')
+    during = refresh(found.paths, read=found.read)
+    assert [change for change in during.changes if change.kind == "manager"] == []
+    found.edit("hq", 'reports_at = ["mqq"]', 'reports_at = ["mq"]')
+    fixed = refresh(found.paths, read=found.read)
+    assert Change("manager", "eng-dev-427", old="ex-engine-lead-427", new="mq-pm") in fixed.changes
+
+
+def test_a_swept_hold_doesnt_come_back_from_a_frozen_snapshot(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read, now=1000.0)
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')
+    text = found.toml("hq/mq").read_text()
+    start = text.index('[[agent]]\nname = "mq-roadmap-assistant"')
+    found.toml("hq/mq").write_text(text[:start] + text[text.index("[[link]]", start) :])
+    seal(found, "hq/mq")
+    assert refresh(found.paths, read=found.read, now=2000.0).index.hold("mq-roadmap-assistant")
+    holds = found.paths.state / "index" / "holds.json"
+    holds.write_text('{"format": 1, "holds": []}')  # what sweep does once the hold ends
+    found.edit("hq/mq/repos/engine", 'mission = "ex-engine-lead work"', 'mission = "y"')
+    later = refresh(found.paths, read=found.read, now=900000.0)
+    assert later.index.hold("mq-roadmap-assistant") is None
+    assert later.changes == ()
+
+
+def test_a_stale_cluster_with_no_last_good_gets_none_from_the_stale_view(tree):
+    found = tree("org")
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')
+    refresh(found.paths, read=found.read)
+    folder = found.paths.state / "index" / "last-good"
+    names = {path.name for path in folder.glob("*.json")}
+    assert index_module._snapshot_name(found.home("hq/mq")) not in names
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads through any mode")
+def test_an_unreadable_state_folder_is_reported(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    folder = found.paths.state / "index"
+    folder.chmod(0)
+    try:
+        with pytest.raises(IndexUnavailable):
+            refresh(found.paths, read=lambda: [])
+    finally:
+        folder.chmod(0o700)

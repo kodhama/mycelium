@@ -81,7 +81,7 @@ decision, and rebuilds the index when any cluster's revision changes.
 - **The index in the cache can be deleted at any time.** The last-good
   snapshots, published names and hold records it can't rebuild live in state.
   Damaged hold or published-name records, or a state or cache folder that
-  can't be written, stop the index with an error, never an empty list.
+  can't be read or written, stop the index with an error, never an empty list.
 
 ## What the store survives
 

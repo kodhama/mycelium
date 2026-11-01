@@ -91,10 +91,12 @@ what came first.
 
 - **A graph error above keeps the clusters below where they were.** A
   cluster can fail on a graph check alone, for example a sealed `reports_at`
-  typo. When it has a snapshot, the graph is built again from that
-  snapshot's pointers, until no new failing cluster has one to fall back on.
-  The clusters below keep their last good place and are marked stale through
-  it. Their snapshots aren't replaced while they're stale. When a failing
+  typo. A cluster with a snapshot falls back to its last good pointers while
+  the graph puts an error on it. It returns to its current declaration once
+  that declaration passes against everyone else's final one, so an error that
+  a rejected declaration caused on another cluster doesn't outlive it. The
+  clusters below keep their last good place and are marked stale through it.
+  No snapshot is written from a stale view, and an existing one is kept. When a failing
   cluster has no snapshot, every orphan is marked stale, because the failing
   cluster may be its manager. Before, only an unreadable cluster did this.
   `topology.build(declarations)` is still the module's one entry.
@@ -102,11 +104,14 @@ what came first.
   `state/index/published.json`, each with its last-known manager or a flag
   that none is known. A name that leaves gets a hold whether its manager was
   known or not, and a name that returns as "unknown" keeps the manager it
-  had. A cache wipe reports nothing as added. A change says when a manager
+  had. A cache wipe reports nothing as added. A stale slice doesn't move the
+  recorded manager, so a manager change made while stale is reported once the
+  slice is current. A name a hold has ended for isn't held again from an old
+  snapshot. A change says when a manager
   isn't known (`old_known`, `new_known`), so `None` never reads as "no
   manager" (R23). Like hold records, a damaged file is reported, not read as
   empty.
-- **A state or cache folder that can't be made or written stops the
+- **A state or cache folder that can't be read, made or written stops the
   rebuild before it writes anything**, with `IndexUnavailable`. A write that
   fails partway also raises `IndexUnavailable`. Holds, then published names,
   are still written first.
