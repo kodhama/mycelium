@@ -4,8 +4,8 @@
 and reports, and gets its mail.
 
 **Status: early.** This release holds the command line's skeleton, the folder
-resolver and the message store. Mailboxes, the directory and the harness
-hooks come in later releases.
+resolver, the message store and the org index. Mailboxes, the directory and
+the harness hooks come in later releases.
 
 ## Run it
 
@@ -37,7 +37,7 @@ the store creates it, even to read**: its folders, its file and its schema.
 
 | folder | default | holds |
 | --- | --- | --- |
-| state | `$XDG_STATE_HOME/kodhama/mycelium` | bindings, hold records, cursors over the clusters' audit logs |
+| state | `$XDG_STATE_HOME/kodhama/mycelium` | bindings, hold records, the index's last-good snapshots, cursors over the clusters' audit logs |
 | data | `$XDG_DATA_HOME/kodhama/mycelium` | the message store (`store.sqlite3`): mailboxes and questions |
 | cache | `$XDG_CACHE_HOME/kodhama/mycelium` | the index built from the clusters; safe to delete |
 | clusters | `$XDG_STATE_HOME/kodhama/clusters` | the registry of clusters, shared with the other kodhama tools |
@@ -59,6 +59,26 @@ When an `XDG_*` variable is unset, empty or relative, mycelium uses
 - **These checks catch a misconfiguration, not an attacker.** They run as the
   store opens. A process running as the same user that swaps a link into the
   `0700` folder while the store opens can get past them.
+
+## The org index
+
+**Each agent's org slice comes from an index of the `.kodhama/` clusters**:
+its manager, reports, peers with their topics, interested parties and
+escalation routes. mycelium never parses a cluster file. It reads them
+through the cluster helper's `kodhama-cluster read --json`, once per
+decision, and rebuilds the index when any cluster's revision changes.
+
+- **The helper isn't released yet.** Until it is, the index reports the
+  helper as unavailable, and the tests use a stand-in. The JSON shape it
+  reads is set out in [the decision](docs/decisions/org-index.md).
+- **A cluster that fails validation keeps its last good entry, marked stale
+  with the reason.** That covers a hand edit, a cycle or two managers for one
+  checkout. Its agents stay routable. Without a last good entry, the slice
+  says the manager is unknown, never that there is none.
+- **A checkout whose folder is gone puts its names on hold** for 7 days, with
+  their last-known manager.
+- **The index in the cache can be deleted at any time.** The last-good
+  snapshots and hold records it can't rebuild live in state.
 
 ## What the store survives
 

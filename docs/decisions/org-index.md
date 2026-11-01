@@ -1,0 +1,70 @@
+---
+type: decision
+title: "The org index: one helper boundary, graph checks in mycelium"
+description: How mycelium reads clusters before the helper ships, where the graph is resolved and validated, and what a failing or vanished cluster leaves in state.
+decided: 2026-11-01
+ticket: GRO-48
+---
+
+# The org index
+
+**mycelium reads clusters only through `mycelium.clusters`, the one module
+that runs `kodhama-cluster read --json`.** It follows hub plan U14 and KTD1,
+KTD7 and KTD18 (`areas/agent-comms/plans/2026-10-27-feat-mycelium-plan.md`,
+revision `b22d0b38`), and the cluster spec (`areas/hq-resume/spec-clusters.md`
+at `d2e622f`). mycelium never parses TOML (KTD1, spec §2.4).
+
+**2026-11-01 decision: a stub shape until the helper ships.** The helper
+isn't released. The spec says only that `read --json` returns every
+registered cluster and its revision. The shape mycelium reads was posted on
+GRO-48 and passed to the helper's owner. Each record carries:
+
+- `home` and `status` (`ok`, `missing` or `unreadable`), plus a `reason`;
+- `revision`, computed now, and `stored_revision`, the one in the file;
+- `instance`, the checkout's id and suffix (§3);
+- `declaration`, the `cluster.toml` as data.
+
+When the real helper ships, `clusters.py` is the only module that changes.
+Until then the tests run a fake helper, `tests/fake_cluster_helper.py`. Its
+fixtures under `tests/fixtures/clusters/` stand in for the helper's shared
+set, which doesn't exist yet.
+
+**2026-11-01 decision: mycelium resolves and validates the graph itself**, in
+`mycelium.topology`: effective names (§3), `reports_at` and `exclude` (§2.2),
+links (§2.1, KTD15) and the §5.1 checks. The spec doesn't say the helper does
+this, so mycelium does it from the declarations. If the helper later returns
+resolved pointers or validation results, `topology.py` is what that replaces.
+
+- Turned down: waiting for the helper to resolve the graph. U4, U5 and U6
+  need the index first.
+
+**2026-11-01 decision: what a cluster's state leaves behind.**
+
+- **A cluster that fails validation keeps its last good entry, marked stale**
+  (KTD18). Failing means unreadable TOML, an unknown schema, a hand edit
+  (`stored_revision` ≠ `revision`) or any §5.1 error. Its names stay routable.
+- **A failing cluster with no last good entry yet** keeps its names routable.
+  Their slice says nothing else is known (`known = false`, manager unknown),
+  which is not "no manager" (R23).
+- **A registered home that is gone, or holds no `cluster.toml`, is
+  `missing`.** Its names leave the clusters and get a hold record. That
+  record keeps the last-known manager, taken from the graph before the
+  removal (KTD7).
+- **A slice is stale when any cluster on its path to the root fails** (R21).
+- **A last-good snapshot is kept for every cluster that validates**, not only
+  for failing ones. A cluster can fall back only to a snapshot taken while it
+  was good. The snapshots also give each hold its last-known manager after a
+  cache wipe.
+
+**Where the files live** (R28): the index in `cache/index.json`; snapshots in
+`state/index/last-good/`, holds in `state/index/holds.json`, and the rebuild
+lock in `state/index/lock`. A rebuild runs under an exclusive `flock`, and
+every file is replaced whole. A caller that can't take the lock within a
+second builds the index in memory and writes nothing, so a hook stays inside
+its timeout. A rebuild with no clusters and no earlier state
+writes nothing (KTD13).
+
+**Left to later units:** ending a hold, forwarding its mail and raising
+alerts belong to U5 and `sweep`. Org events come from the audit log (KTD2,
+U6). A rebuild only returns its changes: names added, names held, managers
+changed.
