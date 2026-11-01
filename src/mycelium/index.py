@@ -333,7 +333,8 @@ def _build(present, current, snapshots, failing: dict[str, list[str]]):
         graph = graph_for(used)
         more = {home for home in graph.errors if home in snapshots} - used
         for home in more:
-            failing.setdefault(home, []).extend(graph.errors[home])
+            listed = failing.setdefault(home, [])
+            listed.extend(reason for reason in graph.errors[home] if reason not in listed)
         if not more:
             break
         used |= more
@@ -510,7 +511,7 @@ class _Files:
     def holds(self) -> dict[str, Hold]:
         """The hold records. A damaged file is reported, never read as "no holds"."""
         try:
-            text = self.holds_file.read_text()
+            text = self.holds_file.read_bytes()  # json decodes it, or calls it damaged
         except FileNotFoundError:
             return {}
         except OSError as error:
@@ -530,7 +531,7 @@ class _Files:
         A damaged file is reported: read as empty, it would let names leave
         without a hold."""
         try:
-            text = self.published_file.read_text()
+            text = self.published_file.read_bytes()  # json decodes it, or calls it damaged
         except FileNotFoundError:
             return None
         except OSError as error:

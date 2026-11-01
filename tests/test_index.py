@@ -523,7 +523,7 @@ def test_a_cluster_a_rejected_declaration_lands_an_error_on_falls_back_and_fails
     assert set(result.index.errors()) == {found.home("hq"), found.home("hq/mq/repos/engine")}
     engine = result.index.slice("ex-engine-lead-427")
     assert (engine.manager, engine.known) == ("mq-pm", True)
-    assert engine.stale is not None
+    assert engine.stale == "; ".join(result.index.errors()[found.home("hq/mq/repos/engine")])
 
 
 def test_a_child_with_no_last_good_keeps_its_place_below_a_fallback(tree):
@@ -756,5 +756,34 @@ def test_a_cluster_below_one_that_fell_back_for_a_clash_is_stale_through_it(tmp_
     y1 = _agents(("y-lead", "@maintainer"))
     y2 = _agents(("y-lead", "@maintainer"), ("dup", "y-lead"))
     refresh(paths, read=_records((h, h1), (c, c1), (y, y1)))
-    lead = refresh(paths, read=_records((h, h2), (c, c1), (y, y2))).index.slice("c-lead")
-    assert lead.manager == "boss1" and lead.stale is not None
+    index = refresh(paths, read=_records((h, h2), (c, c1), (y, y2))).index
+    lead = index.slice("c-lead")
+    assert c not in index.errors()
+    assert lead.manager == "boss1" and "above" in lead.stale
+
+
+def test_a_fallback_lists_each_reason_once(tmp_path):
+    paths, homes = _plain(tmp_path, "a", "b", "c")
+    refresh(
+        paths,
+        read=_records(
+            *((h, _agents((f"{n}-lead", "@maintainer"))) for h, n in zip(homes, "abc", strict=True))
+        ),
+    )
+    clash = [
+        (h, _agents((f"{n}-lead", "@maintainer"), ("dup", f"{n}-lead")))
+        for h, n in zip(homes, "abc", strict=True)
+    ]
+    errors = refresh(paths, read=_records(*clash)).index.errors()
+    assert set(errors) == set(homes)
+    assert all(len(set(reasons)) == len(reasons) for reasons in errors.values())
+
+
+@pytest.mark.parametrize("name", ["holds.json", "published.json"])
+def test_a_state_file_that_isnt_text_is_reported_as_damaged(tree, name):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    (found.paths.state / "index" / name).write_bytes(b"\xff\xfe not utf-8")
+    (found.paths.cache / "index.json").unlink()
+    with pytest.raises(IndexUnavailable, match="damaged"):
+        refresh(found.paths, read=found.read)
