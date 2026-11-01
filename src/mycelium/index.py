@@ -241,7 +241,7 @@ def _rebuild(
         problem = _problem(record)
         if problem is not None:
             failing[home] = [problem]
-    graph = _build(present, current, snapshots, failing)
+    graph, shown_last_good = _build(present, current, snapshots, failing)
     # A failing cluster with a snapshot places the clusters below it by its last good
     # pointers. One without places them by what it declares now, or (unreadable) not at all.
     unplaced = sorted(home for home in failing if home not in snapshots)
@@ -260,6 +260,8 @@ def _rebuild(
                     slices[found.name] = found
             continue
         stale = _failing_above(home, graph.parent, failing)
+        if stale is None and home in shown_last_good:
+            stale = "shown as last good: a failing cluster's declaration clashes with this one's"
         made = [graph.slices[name] for name in graph.names.get(home, [])]
         if stale is None and unplaced and any(found.orphan for found in made):
             what = (
@@ -285,7 +287,7 @@ def _rebuild(
     # Snapshots stand in only where no published names were written yet.
     before = _published_from(snapshots) if published_before is None else published_before
     published = _publish(slices, before, held_before)
-    changes = _changes(before, slices, holds, now)
+    changes = _changes(before, published, holds, now)
     errors = {home: tuple(reasons) for home, reasons in failing.items()}
     if not write:
         return Refresh(Index(slices, errors, holds), True, ())
@@ -305,15 +307,17 @@ def _rebuild(
 
 
 def _build(present, current, snapshots, failing: dict[str, list[str]]):
-    """The graph, with each failing cluster that has a snapshot read from it.
+    """The graph, with each failing cluster that has a snapshot read from it,
+    and the clusters read from their snapshot that don't fail themselves.
 
     A graph error can make a cluster fail that passed on its own (a sealed
-    `reports_at` typo), and a rejected declaration can land errors on other
-    clusters (a pointer conflict lands on its target). So a cluster falls back
-    to its snapshot while the graph puts an error on it, and comes back to its
-    current declaration once that declaration passes against everyone else's
-    final one. `failing` gains the errors of the final graph, and each fallback
-    cluster's own."""
+    `reports_at` typo), so a cluster the graph puts an error on falls back to
+    its snapshot, until no new one does. Fallbacks only grow, so this settles.
+    Then each cluster that fell back for a graph error alone is checked once,
+    on its current declaration against the others as they settled: an error
+    that only another cluster's rejected declaration put on it isn't its own.
+    Such a cluster doesn't fail; it is shown from its snapshot, marked stale.
+    `failing` gains the errors of the settled graph and each fallback's own."""
 
     def graph_for(used: set[str]):
         inputs = []
@@ -328,33 +332,25 @@ def _build(present, current, snapshots, failing: dict[str, list[str]]):
                 opaque.add(home)
         return build(inputs, opaque=opaque)
 
-    base = set(failing)  # failing on their own record: these always fall back
+    base = set(failing)  # failing on their own record
     used = {home for home in base if home in snapshots}
-    graph = graph_for(used)
-    for _ in range(2 * len(present) + 2):  # each pass adds or clears a fallback; bounded
-        more = {home for home in graph.errors if home in snapshots} - used
-        if more:
-            used |= more
-        else:
-            cleared = next(
-                (
-                    home
-                    for home in sorted(used - base)
-                    if home not in graph_for(used - {home}).errors
-                ),
-                None,
-            )
-            if cleared is None:
-                break
-            used.discard(cleared)
+    while True:
         graph = graph_for(used)
+        more = {home for home in graph.errors if home in snapshots} - used
+        if not more:
+            break
+        used |= more
+    cleared = set()
     for home in sorted(used - base):
         own = graph_for(used - {home}).errors.get(home)
-        failing[home] = list(own or ["its declaration fails against the others' last good ones"])
+        if own:
+            failing[home] = list(own)
+        else:
+            cleared.add(home)
     for home, reasons in graph.errors.items():
         listed = failing.setdefault(home, [])
         listed.extend(reason for reason in reasons if reason not in listed)
-    return graph
+    return graph, cleared - set(failing)
 
 
 def _stale(found: Slice, reason: str) -> Slice:
@@ -391,56 +387,58 @@ def _published_from(snapshots) -> Published:
 
 
 def _publish(slices: Mapping[str, Slice], before: Published, held: Mapping[str, Hold]) -> Published:
-    """What this rebuild publishes. A name whose manager isn't known now keeps
-    the last one known, from the last rebuild or from the hold it returns from."""
+    """What this rebuild publishes, and so the baseline changes are taken from.
+
+    A name already published moves only to a current slice's known manager: a
+    stale or unknown slice keeps the last one, and its change is reported once
+    the slice is current. A name new to the list takes its slice's manager, or,
+    when that isn't known, the one its hold kept."""
     published = {}
     for name, found in slices.items():
-        if _known(found) and found.stale is None:
-            published[name] = {"manager": found.manager, "known": True}
-        elif before.get(name, {}).get("known"):
-            # A stale slice doesn't move the baseline: its change is reported once current.
-            published[name] = before[name]
-        elif name in held and held[name].manager is not None:
-            published[name] = {"manager": held[name].manager, "known": True}
+        if name in before:
+            if _known(found) and found.stale is None:
+                published[name] = {"manager": found.manager, "known": True}
+            else:
+                published[name] = before[name]
         elif _known(found):
             published[name] = {"manager": found.manager, "known": True}
+        elif name in held and held[name].manager is not None:
+            published[name] = {"manager": held[name].manager, "known": True}
         else:
             published[name] = {"manager": None, "known": False}
     return published
 
 
-def _changes(before: Published, slices: Mapping[str, Slice], holds: dict[str, Hold], now: float):
-    """Holds made and dropped in `holds`, and what changed since the last rebuild.
+def _changes(before: Published, published: Published, holds: dict[str, Hold], now: float):
+    """Holds made and dropped in `holds`, and what changed from `before` to `published`.
 
     Every name the last rebuild published and this one doesn't is held, known
-    or not (KTD7). A stale slice reports no manager change: it isn't current."""
+    or not (KTD7)."""
     changes = []
-    for name in sorted(set(before) - set(slices)):
+    for name in sorted(set(before) - set(published)):
         if name not in holds:
             manager = before[name]["manager"] if before[name]["known"] else None
             holds[name] = Hold(name, now, manager)
             changes.append(Change("held", name, old=manager, old_known=before[name]["known"]))
     for name in list(holds):
-        if name in slices:
+        if name in published:
             del holds[name]
-    for name in sorted(slices):
-        found = slices[name]
-        known = _known(found)
+    for name in sorted(published):
+        new = published[name]
         if name not in before:
-            new = found.manager if known else None
-            changes.append(Change("added", name, new=new, new_known=known))
-        elif known and found.stale is None:
+            changes.append(Change("added", name, new=new["manager"], new_known=new["known"]))
+        elif new != before[name]:
             old = before[name]
-            if not old["known"] or old["manager"] != found.manager:
-                changes.append(
-                    Change(
-                        "manager",
-                        name,
-                        old=old["manager"] if old["known"] else None,
-                        new=found.manager,
-                        old_known=old["known"],
-                    )
+            changes.append(
+                Change(
+                    "manager",
+                    name,
+                    old=old["manager"],
+                    new=new["manager"],
+                    old_known=old["known"],
+                    new_known=new["known"],
                 )
+            )
     return changes
 
 
@@ -494,12 +492,23 @@ class _Files:
 
     def snapshots(self) -> dict[str, dict[str, Any]]:
         found = {}
+        # glob reads an unreadable folder as empty, which would drop every fallback.
         try:
-            paths = sorted(self.snapshot_dir.glob("*.json")) if self.snapshot_dir.is_dir() else []
+            exists = self.snapshot_dir.is_dir()
+            if exists and not os.access(self.snapshot_dir, os.R_OK | os.X_OK):
+                raise PermissionError("the folder can't be read")
+            paths = sorted(self.snapshot_dir.glob("*.json")) if exists else []
         except OSError as error:
             raise IndexUnavailable(f"{self.snapshot_dir} can't be read: {error}") from None
         for path in paths:
-            data = _load(path)
+            try:
+                text = path.read_text()
+            except OSError as error:  # skipped, it would be deleted as unwanted
+                raise IndexUnavailable(f"{path} can't be read: {error}") from None
+            try:
+                data = json.loads(text)
+            except ValueError:
+                continue  # damaged: rebuilt from the clusters
             if _is_snapshot(data):
                 found[data["home"]] = data
         return found

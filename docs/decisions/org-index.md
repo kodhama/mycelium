@@ -91,28 +91,32 @@ what came first.
 
 - **A graph error above keeps the clusters below where they were.** A
   cluster can fail on a graph check alone, for example a sealed `reports_at`
-  typo. A cluster with a snapshot falls back to its last good pointers while
-  the graph puts an error on it. It returns to its current declaration once
-  that declaration passes against everyone else's final one, so an error that
-  a rejected declaration caused on another cluster doesn't outlive it. The
-  clusters below keep their last good place and are marked stale through it.
-  No snapshot is written from a stale view, and an existing one is kept. When a failing
-  cluster has no snapshot, every orphan is marked stale, because the failing
-  cluster may be its manager. Before, only an unreadable cluster did this.
-  `topology.build(declarations)` is still the module's one entry.
+  typo. A cluster the graph puts an error on falls back to its snapshot's
+  pointers, until no new one does. Fallbacks only grow, so this settles. Each
+  cluster that fell back for a graph error alone is then checked once, on its
+  current declaration against the others as they settled. One that passes
+  doesn't fail: an error another cluster's rejected declaration put on it
+  isn't its own. It is shown from its snapshot, marked stale. The clusters
+  below a failing one keep their last good place and are marked stale
+  through it. No snapshot is written from a stale view, and an existing one
+  is kept. When a failing cluster has no snapshot, every orphan is marked
+  stale, because the failing cluster may be its manager. Before, only an
+  unreadable cluster did this. `topology.build(declarations)` is still the
+  module's one entry.
 - **Names the last rebuild published are kept in state**, in
   `state/index/published.json`, each with its last-known manager or a flag
-  that none is known. A name that leaves gets a hold whether its manager was
-  known or not, and a name that returns as "unknown" keeps the manager it
-  had. A cache wipe reports nothing as added. A stale slice doesn't move the
-  recorded manager, so a manager change made while stale is reported once the
-  slice is current. A name a hold has ended for isn't held again from an old
-  snapshot. A change says when a manager
-  isn't known (`old_known`, `new_known`), so `None` never reads as "no
-  manager" (R23). Like hold records, a damaged file is reported, not read as
-  empty.
+  that none is known. Changes are the difference between that list and the
+  new one. A name that leaves gets a hold whether its manager was known or
+  not. A name new to the list takes its slice's manager, or the one its hold
+  kept. A name already on it moves only to a current slice's known manager,
+  so a change seen while stale is reported once the slice is current. A
+  cache wipe reports nothing, and a name a hold has ended for isn't held
+  again from an old snapshot. A change says when a manager isn't known
+  (`old_known`, `new_known`), so `None` never reads as "no manager" (R23).
+  Like hold records, a damaged file is reported, not read as empty.
 - **A state or cache folder that can't be read, made or written stops the
-  rebuild before it writes anything**, with `IndexUnavailable`. A write that
+  rebuild before it writes anything**, with `IndexUnavailable`, and so does a
+  snapshot file that can't be read. A damaged one is still rebuilt. A write that
   fails partway also raises `IndexUnavailable`. Holds, then published names,
   are still written first.
 - **A NUL in an agent's `cwd`, `reports_at` or `exclude` fails that

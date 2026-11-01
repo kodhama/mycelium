@@ -568,3 +568,112 @@ def test_an_unreadable_state_folder_is_reported(tree):
             refresh(found.paths, read=lambda: [])
     finally:
         folder.chmod(0o700)
+
+
+# Second floor review (5ab6494).
+
+
+def _crossed(tmp_path, extras):
+    """X points at W now, W pointed at X when last good, and W now holds a root head."""
+    from mycelium.topology import CLUSTER_FILE, Declared
+
+    root = tmp_path / f"crossed-{extras}"
+
+    def home(name):
+        path = root / name / CLUSTER_FILE
+        path.parent.mkdir(parents=True)
+        path.write_text("")
+        return os.path.realpath(root / name)
+
+    x, w = home("a-x"), home("b-w")
+    current = {
+        x: Declared(x, None, {"agent": [{"name": "x-lead", "reports_at": ["../b-w"]}]}),
+        w: Declared(w, None, {"agent": [{"name": "w-lead", "manager": "@maintainer"}]}),
+    }
+    snapshots = {
+        x: {"suffix": None, "declaration": {"agent": [{"name": "x-lead"}]}},
+        w: {
+            "suffix": None,
+            "declaration": {"agent": [{"name": "w-lead", "reports_at": ["../a-x"]}]},
+        },
+    }
+    for number in range(extras):
+        other = home(f"c-{number}")
+        agents = [{"name": f"e{number}", "manager": "@maintainer"}]
+        current[other] = Declared(other, None, {"agent": agents})
+    failing: dict = {}
+    index_module._build([(each, None) for each in current], current, snapshots, failing)
+    return {os.path.basename(each): reasons for each, reasons in failing.items()}
+
+
+def test_the_fallback_settles_the_same_whatever_else_is_registered(tmp_path):
+    results = [_crossed(tmp_path, extras) for extras in range(4)]
+    assert all(result == results[0] for result in results)
+    assert results[0], "a crossed pair of declarations fails somewhere"
+    for reasons in results[0].values():
+        assert reasons and not any("last good ones" in reason for reason in reasons)
+
+
+def test_a_name_back_from_a_hold_while_stale_is_added_once_with_one_manager(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read, now=1000.0)
+    shutil.rmtree(found.root / "hq/mq/repos/engine")
+    refresh(found.paths, read=found.read, now=2000.0)  # held under mq-pm
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')
+    with found.toml("hq/mq").open("a") as handle:
+        handle.write(
+            '\n[[agent]]\nname = "new-boss"\nmanager = "mq-pm"\nmission = "boss"\n'
+            '\n[[agent]]\nname = "ex-engine-lead-427"\nmanager = "new-boss"\nmission = "back"\n'
+        )
+    seal(found, "hq/mq")
+    back = refresh(found.paths, read=found.read, now=3000.0)
+    added = [change for change in back.changes if change.name == "ex-engine-lead-427"]
+    assert added == [Change("added", "ex-engine-lead-427", new="new-boss")]
+    found.edit("hq", 'reports_at = ["mqq"]', 'reports_at = ["mq"]')
+    fixed = refresh(found.paths, read=found.read, now=4000.0)
+    assert [change for change in fixed.changes if change.name == "ex-engine-lead-427"] == []
+
+
+def test_a_manager_learned_while_stale_is_reported_once_current(tree):
+    found = tree("org")
+    found.edit("hq/mq/repos/engine", 'mission = "ex-engine-lead work"', 'mission = "x"', seal=False)
+    refresh(found.paths, read=found.read)  # published as unknown
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')
+    seal(found, "hq/mq/repos/engine")
+    during = refresh(found.paths, read=found.read)
+    assert [change for change in during.changes if change.name == "ex-engine-lead-427"] == []
+    found.edit("hq", 'reports_at = ["mqq"]', 'reports_at = ["mq"]')
+    fixed = refresh(found.paths, read=found.read)
+    expected = Change("manager", "ex-engine-lead-427", new="mq-pm", old_known=False)
+    assert expected in fixed.changes
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads through any mode")
+def test_an_unreadable_last_good_folder_is_reported(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    folder = found.paths.state / "index" / "last-good"
+    found.edit("hq/mq", 'mission = "mq-pm work"', 'mission = "by hand"', seal=False)
+    folder.chmod(0o300)
+    try:
+        with pytest.raises(IndexUnavailable):
+            refresh(found.paths, read=found.read)
+    finally:
+        folder.chmod(0o700)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads through any mode")
+def test_an_unreadable_snapshot_is_reported_and_kept(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    path = (
+        found.paths.state / "index" / "last-good" / index_module._snapshot_name(found.home("hq/mq"))
+    )
+    found.edit("hq/mq", 'mission = "mq-pm work"', 'mission = "by hand"', seal=False)
+    path.chmod(0)
+    try:
+        with pytest.raises(IndexUnavailable):
+            refresh(found.paths, read=found.read)
+    finally:
+        path.chmod(0o600)
+    assert path.exists()
