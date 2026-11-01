@@ -1,0 +1,42 @@
+{
+  "names": [
+    "hq-lead",
+    "t-dev",
+    "t-docs",
+    "t-lead",
+    "t-qa"
+  ],
+  "errors": {},
+  "slices": {
+    "t-lead": {
+      "manager": "hq-lead",
+      "reports": [
+        "t-dev",
+        "t-docs"
+      ],
+      "peers": []
+    },
+    "t-dev": {
+      "manager": "t-lead",
+      "reports": [
+        "t-qa"
+      ],
+      "peers": [
+        [
+          "t-docs",
+          null
+        ]
+      ]
+    },
+    "t-qa": {
+      "manager": "t-dev",
+      "reports": [],
+      "peers": []
+    },
+    "hq-lead": {
+      "reports": [
+        "t-lead"
+      ]
+    }
+  }
+}

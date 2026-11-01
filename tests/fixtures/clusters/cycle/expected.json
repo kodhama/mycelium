@@ -1,0 +1,37 @@
+{
+  "names": [
+    "hq-lead",
+    "x-lead",
+    "y-lead",
+    "z-lead"
+  ],
+  "errors": {
+    "x": [
+      "cycle"
+    ],
+    "y": [
+      "cycle"
+    ],
+    "z": [
+      "points at itself"
+    ]
+  },
+  "slices": {
+    "x-lead": {
+      "known": false,
+      "stale": "cycle"
+    },
+    "y-lead": {
+      "known": false,
+      "stale": "cycle"
+    },
+    "z-lead": {
+      "known": false,
+      "stale": "points at itself"
+    },
+    "hq-lead": {
+      "stale": null,
+      "reports": []
+    }
+  }
+}

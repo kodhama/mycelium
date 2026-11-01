@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -85,3 +86,14 @@ def test_output_that_is_not_the_shape_is_refused(tmp_path, output):
     argv = script(tmp_path, f"print({output!r})\n")
     with pytest.raises(HelperUnavailable, match="unexpected output"):
         read(argv)
+
+
+def test_mycelium_itself_never_parses_toml():
+    # KTD1, cluster spec §2.4: the helper parses cluster files, mycelium reads its JSON.
+    source = Path(__file__).parent.parent / "src" / "mycelium"
+    offenders = [
+        str(path.relative_to(source))
+        for path in source.rglob("*.py")
+        if re.search(r"^\s*(import|from)\s+(tomllib|tomli|toml)\b", path.read_text(), re.M)
+    ]
+    assert offenders == []

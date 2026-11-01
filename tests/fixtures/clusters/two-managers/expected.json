@@ -1,0 +1,19 @@
+{
+  "names": [
+    "a-lead",
+    "hq-lead",
+    "hq-ops"
+  ],
+  "errors": {
+    "hq/repos/a": [
+      "two explicit paths reach it"
+    ]
+  },
+  "slices": {
+    "a-lead": {
+      "manager": null,
+      "known": false,
+      "stale": "two explicit paths reach it"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+revision = "sha256:75807d98239ba70928685f5ca367b7e8a9c330ba3dd45ecd8ab85fe19dc151c5"
+schema = 1
+
+[[agent]]
+name = "hq-lead"
+role = "grove:manager"
+manager = "@maintainer"
+run = "running"
+mission = "hq-lead work"

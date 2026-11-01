@@ -1,0 +1,92 @@
+{
+  "names": [
+    "ex-engine-lead-427",
+    "hq-dashboard",
+    "hq-lead",
+    "mq-pm",
+    "mq-roadmap-assistant",
+    "scratch-lead"
+  ],
+  "errors": {},
+  "slices": {
+    "mq-pm": {
+      "manager": "hq-lead",
+      "known": true,
+      "orphan": false,
+      "stale": null,
+      "run": "running",
+      "reports": [
+        "ex-engine-lead-427",
+        "mq-roadmap-assistant"
+      ],
+      "peers": [
+        [
+          "hq-dashboard",
+          "fleet status for MQ tracks"
+        ]
+      ],
+      "interested": [
+        [
+          "hq-dashboard",
+          [
+            "status",
+            "done",
+            "blocked"
+          ]
+        ]
+      ],
+      "follows": [],
+      "escalation": [
+        [
+          "@maintainer",
+          [
+            "product",
+            "design"
+          ]
+        ]
+      ]
+    },
+    "hq-lead": {
+      "manager": "@maintainer",
+      "reports": [
+        "hq-dashboard",
+        "mq-pm"
+      ],
+      "orphan": false
+    },
+    "hq-dashboard": {
+      "manager": "hq-lead",
+      "peers": [
+        [
+          "mq-pm",
+          "fleet status for MQ tracks"
+        ]
+      ],
+      "follows": [
+        [
+          "mq-pm",
+          [
+            "status",
+            "done",
+            "blocked"
+          ]
+        ]
+      ]
+    },
+    "mq-roadmap-assistant": {
+      "manager": "mq-pm",
+      "run": "parked",
+      "reports": []
+    },
+    "ex-engine-lead-427": {
+      "manager": "mq-pm",
+      "orphan": false
+    },
+    "scratch-lead": {
+      "manager": null,
+      "orphan": true,
+      "known": true,
+      "stale": null
+    }
+  }
+}

@@ -1,0 +1,23 @@
+revision = "sha256:22e25ecb6cdef4674794d66313c8b4e88bb353cf36dcb99f5fb85fb7d4ab7ddd"
+schema = 1
+
+[[agent]]
+name = "hq-lead"
+role = "grove:manager"
+manager = "@maintainer"
+run = "running"
+mission = "hq-lead work"
+reports_at = ["mq"]
+
+[[agent]]
+name = "hq-dashboard"
+role = "grove:assistant"
+manager = "hq-lead"
+run = "running"
+mission = "hq-dashboard work"
+
+[[link]]
+kind = "interested"
+from = "hq-dashboard"
+to = "mq-pm"
+events = ["status", "done", "blocked"]

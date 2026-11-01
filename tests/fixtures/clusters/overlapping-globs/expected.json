@@ -1,0 +1,35 @@
+{
+  "names": [
+    "a-dev",
+    "a-lead",
+    "hq-lead",
+    "hq-ops"
+  ],
+  "errors": {
+    "hq/repos/a": [
+      "two globs reach it"
+    ]
+  },
+  "slices": {
+    "a-lead": {
+      "manager": null,
+      "known": false,
+      "stale": "two globs reach it"
+    },
+    "a-dev": {
+      "manager": null,
+      "known": false,
+      "stale": "two globs reach it"
+    },
+    "hq-lead": {
+      "reports": [
+        "hq-ops"
+      ],
+      "stale": null
+    },
+    "hq-ops": {
+      "reports": [],
+      "stale": null
+    }
+  }
+}

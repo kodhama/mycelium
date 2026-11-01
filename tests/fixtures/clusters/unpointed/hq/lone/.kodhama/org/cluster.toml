@@ -1,0 +1,16 @@
+revision = "sha256:38ce6d55c0b86652c3ba8f48727b9700787687c1cf8cddcf9c2e895b25ba15cf"
+schema = 1
+
+[[agent]]
+name = "lone-lead"
+role = "grove:manager"
+manager = ""
+run = "running"
+mission = "lone-lead work"
+
+[[agent]]
+name = "lone-dev"
+role = "grove:manager"
+manager = "lone-lead"
+run = "running"
+mission = "lone-dev work"
