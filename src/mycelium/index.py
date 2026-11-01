@@ -32,6 +32,9 @@ from mycelium.paths import Paths
 from mycelium.topology import Declared, Slice, build, unknown
 
 HOLD_SECONDS = 7 * 24 * 60 * 60
+# How long a caller waits for another process's rebuild before building in
+# memory: a hook must finish within its harness's timeout.
+LOCK_WAIT_SECONDS = 1.0
 FORMAT = 1  # of the cache, snapshot and hold files
 
 HAND_EDITED = (
@@ -124,7 +127,12 @@ class Refresh:
 Reader = Callable[[], list[clusters.ClusterRecord]]
 
 
-def refresh(paths: Paths, read: Reader = clusters.read, now: float | None = None) -> Refresh:
+def refresh(
+    paths: Paths,
+    read: Reader = clusters.read,
+    now: float | None = None,
+    lock_wait: float = LOCK_WAIT_SECONDS,
+) -> Refresh:
     """The index as the clusters stand now, after one revision check (KTD1).
 
     Raises clusters.HelperUnavailable when the helper can't answer: the
@@ -138,11 +146,12 @@ def refresh(paths: Paths, read: Reader = clusters.read, now: float | None = None
         return Refresh(cached, False, ())
     if not records and not files.has_state():
         return Refresh(Index({}, {}, {}), False, ())  # no clusters: write nothing (KTD13)
-    with files.locked():
+    with files.locked(lock_wait) as held:
         cached = files.cached(key)  # another process rebuilt while we waited
         if cached is not None:
             return Refresh(cached, False, ())
-        return _rebuild(files, records, key, now)
+        # Without the lock, build in memory only: the holder writes, and reports the changes.
+        return _rebuild(files, records, key, now, write=held)
 
 
 def _key(records: list[clusters.ClusterRecord]) -> list[list[Any]]:
@@ -167,7 +176,9 @@ def _problem(record: clusters.ClusterRecord) -> str | None:
     return None
 
 
-def _rebuild(files: "_Files", records: list[clusters.ClusterRecord], key, now: float) -> Refresh:
+def _rebuild(
+    files: "_Files", records: list[clusters.ClusterRecord], key, now: float, write: bool
+) -> Refresh:
     snapshots = files.snapshots()
     held_before = files.holds()
     holds = dict(held_before)
@@ -222,6 +233,8 @@ def _rebuild(files: "_Files", records: list[clusters.ClusterRecord], key, now: f
 
     changes = _changes(snapshots, slices, holds, now)
     errors = {home: tuple(reasons) for home, reasons in failing.items()}
+    if not write:
+        return Refresh(Index(slices, errors, holds), True, ())
     files.write(kept, snapshots, holds, held_before, key, slices, errors)
     return Refresh(Index(slices, errors, holds), True, tuple(changes))
 
@@ -275,12 +288,12 @@ class _Files:
         return self.holds_file.exists() or self.snapshot_dir.exists()
 
     @contextmanager
-    def locked(self) -> Iterator[None]:
+    def locked(self, wait: float) -> Iterator[bool]:
+        """Hold the rebuild lock, waiting at most `wait` seconds; yields whether it is held."""
         _make_dirs(self.state)
         descriptor = os.open(self.lock_file, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
-            yield
+            yield _take(descriptor, time.monotonic() + wait)
         finally:
             os.close(descriptor)
 
@@ -330,6 +343,17 @@ class _Files:
                 "errors": {home: list(reasons) for home, reasons in errors.items()},
             },
         )
+
+
+def _take(descriptor: int, deadline: float) -> bool:
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.02)
 
 
 def _snapshot_name(home: str) -> str:

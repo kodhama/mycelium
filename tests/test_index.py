@@ -1,6 +1,9 @@
 """The index's revision check, cache, last-good entries and holds (hub plan U14)."""
 
+import fcntl
+import os
 import shutil
+import time
 
 import pytest
 
@@ -202,3 +205,24 @@ def test_the_index_files_are_owner_only(tree):
     for path in [found.paths.cache / "index.json", found.paths.state / "index" / "holds.json"]:
         assert path.stat().st_mode & 0o777 == 0o600
     assert (found.paths.state / "index").stat().st_mode & 0o777 == 0o700
+
+
+def test_a_held_rebuild_lock_never_makes_a_caller_wait_past_its_bound(tree):
+    # A hook must finish within its harness's timeout, so a caller that can't
+    # get the lock builds the index in memory and writes nothing.
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    found.edit("hq/mq/repos/engine", 'run = "running"', 'run = "parked"')
+    cache = (found.paths.cache / "index.json").read_text()
+    descriptor = os.open(found.paths.state / "index" / "lock", os.O_RDWR)
+    fcntl.flock(descriptor, fcntl.LOCK_EX)
+    try:
+        started = time.monotonic()
+        result = refresh(found.paths, read=found.read, lock_wait=0.2)
+        waited = time.monotonic() - started
+    finally:
+        os.close(descriptor)
+    assert waited < 2
+    assert result.index.run("ex-engine-lead-427") == "parked"
+    assert result.changes == ()  # the holder of the lock reports them
+    assert (found.paths.cache / "index.json").read_text() == cache
