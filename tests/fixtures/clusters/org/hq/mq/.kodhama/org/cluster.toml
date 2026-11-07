@@ -1,0 +1,30 @@
+revision = "sha256:6a2c41f6a2096b39bc676a9b239efc7de63cef1f657c19a2061e014031fbf882"
+schema = 1
+
+[[agent]]
+name = "mq-pm"
+role = "grove:manager"
+manager = ""
+run = "running"
+mission = "mq-pm work"
+reports_at = ["repos/*"]
+exclude = ["repos/scratch"]
+
+[[agent]]
+name = "mq-roadmap-assistant"
+role = "grove:assistant"
+manager = "mq-pm"
+run = "parked"
+mission = "mq-roadmap-assistant work"
+
+[[link]]
+kind = "peer"
+from = "mq-pm"
+to = "hq-dashboard"
+topic = "fleet status for MQ tracks"
+
+[[link]]
+kind = "escalation"
+from = "mq-pm"
+to = "@maintainer"
+when = ["product", "design"]

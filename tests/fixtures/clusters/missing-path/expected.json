@@ -1,0 +1,24 @@
+{
+  "names": [
+    "root-lead",
+    "root-ops",
+    "t-lead"
+  ],
+  "errors": {
+    "hq": [
+      "repos/gone",
+      "repos/empty"
+    ]
+  },
+  "slices": {
+    "root-lead": {
+      "known": false,
+      "stale": "repos/gone"
+    },
+    "t-lead": {
+      "manager": "root-lead",
+      "known": true,
+      "stale": "repos/gone"
+    }
+  }
+}

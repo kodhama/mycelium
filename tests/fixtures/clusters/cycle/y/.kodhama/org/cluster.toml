@@ -1,0 +1,10 @@
+revision = "sha256:527f875f2e478739fee200a581d0c79804ee7aaad88a0e705cdab4269165afd5"
+schema = 1
+
+[[agent]]
+name = "y-lead"
+role = "grove:manager"
+manager = ""
+run = "running"
+mission = "y-lead work"
+reports_at = ["../x"]

@@ -1,0 +1,9 @@
+revision = "sha256:ec0bf44a4b3649510bed18985fe9d483f0e74c896500b986955e51a72b9a6f70"
+schema = 1
+
+[[agent]]
+name = "scratch-lead"
+role = "grove:manager"
+manager = ""
+run = "running"
+mission = "scratch-lead work"

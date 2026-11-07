@@ -1,0 +1,18 @@
+revision = "sha256:37334dcb82af5bfb993c5e30932765357e04daaadd610d50a86e98d644884133"
+schema = 1
+
+[[agent]]
+name = "root-lead"
+role = "grove:manager"
+manager = "@maintainer"
+run = "running"
+mission = "root-lead work"
+reports_at = ["repos/*"]
+
+[[agent]]
+name = "root-ops"
+role = "grove:manager"
+manager = "root-lead"
+run = "running"
+mission = "root-ops work"
+reports_at = ["linked"]

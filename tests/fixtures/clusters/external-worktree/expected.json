@@ -1,0 +1,21 @@
+{
+  "names": [
+    "app-lead-101",
+    "app-lead-102",
+    "root-lead"
+  ],
+  "errors": {},
+  "slices": {
+    "app-lead-101": {
+      "manager": "root-lead",
+      "orphan": false,
+      "stale": null
+    },
+    "app-lead-102": {
+      "manager": null,
+      "orphan": true,
+      "known": true,
+      "stale": null
+    }
+  }
+}
