@@ -787,3 +787,55 @@ def test_a_state_file_that_isnt_text_is_reported_as_damaged(tree, name):
     (found.paths.cache / "index.json").unlink()
     with pytest.raises(IndexUnavailable, match="damaged"):
         refresh(found.paths, read=found.read)
+
+
+# Lead's review of ad26051 (round 2, GRO-48 comment 2142f2fa).
+
+UNREADABLE = "this is not toml = = =\n"
+
+
+def test_a_cluster_seen_only_through_a_failing_parent_keeps_its_names_when_unreadable(tree):
+    found = tree("org")
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')  # mq never gets a snapshot
+    first = refresh(found.paths, read=found.read, now=1000.0).index.slice("mq-pm")
+    found.toml("hq/mq").write_text(UNREADABLE)
+    later = refresh(found.paths, read=found.read, now=2000.0)
+    pm = later.index.slice("mq-pm")
+    assert "mq-roadmap-assistant" in later.index.names()
+    assert pm is not None and not pm.known and pm.manager is None
+    assert pm.stale is not None and (pm.run, pm.mission) == (first.run, first.mission)
+    assert later.index.hold("mq-pm") is None
+    assert later.changes == ()
+
+
+def test_a_name_added_while_stale_stays_routable_when_its_cluster_falls_back(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read, now=1000.0)  # every cluster has a snapshot
+    found.edit("hq", 'mission = "root-lead work"', 'mission = "x"', seal=False)
+    agent = 'mission = "mq-roadmap-assistant work"\n'
+    new = '\n[[agent]]\nname = "mq-new"\nrole = "grove:assistant"\nmanager = "mq-pm"\n'
+    found.edit("hq/mq", agent, agent + new + 'run = "running"\nmission = "mq-new work"\n')
+    added = refresh(found.paths, read=found.read, now=2000.0)
+    assert "mq-new" in added.index.names()  # published, but mq's snapshot predates it
+    found.toml("hq/mq").write_text(UNREADABLE)
+    later = refresh(found.paths, read=found.read, now=3000.0)
+    assert "mq-new" in later.index.names()
+    assert later.index.slice("mq-new").stale is not None
+    assert later.index.hold("mq-new") is None
+    assert not [change for change in later.changes if change.kind == "held"]
+
+
+def test_a_stale_slice_with_no_manager_reads_as_unknown(tree):
+    found = tree("org")
+    found.edit("hq", 'reports_at = ["mq"]', 'reports_at = ["mqq"]')
+    pm = refresh(found.paths, read=found.read).index.slice("mq-pm")
+    assert pm.stale is not None and pm.manager is None
+    assert not pm.known
+
+
+def test_damaged_published_names_are_reported_on_a_cache_hit(tree):
+    found = tree("org")
+    refresh(found.paths, read=found.read)
+    (found.paths.state / "index" / "published.json").write_text('{"format": 1, "names": []}')
+    with pytest.raises(IndexUnavailable, match="published.json"):
+        refresh(found.paths, read=found.read)

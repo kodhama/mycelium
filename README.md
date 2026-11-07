@@ -74,8 +74,9 @@ decision, and rebuilds the index when any cluster's revision changes.
 - **A cluster that fails validation keeps its last good entry, marked stale
   with the reason.** That covers a hand edit, a cycle or two managers for one
   checkout. Its agents stay routable. Without a last good entry, the slice
-  says the manager is unknown, never that there is none. The clusters below
-  a failing one keep their place, marked stale too.
+  says the manager is unknown, never that there is none. A failing cluster
+  keeps every name it had, with or without one. The clusters below a failing
+  one keep their place, marked stale too.
 - **A checkout whose folder is gone puts its names on hold** for 7 days, with
   their last-known manager, whether or not that manager was ever known.
 - **The index in the cache can be deleted at any time.** The last-good

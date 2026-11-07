@@ -133,3 +133,19 @@ Turned down, as the review asked: holding every name on an empty helper
 answer while state exists is the designed KTD7 outcome. A decision may use a
 cache read slightly later than its own answer, and the next refresh corrects
 it.
+
+**2026-11-07 decision: a failing cluster keeps every name it had, as the
+lead's second review asked.**
+
+- **Each published name also keeps its own fields**: home, declared name,
+  role, run and mission. A cluster that fails keeps every name the last
+  rebuild published from it, even one that no snapshot of it holds: a
+  cluster seen only through a failing parent never got a snapshot, and a
+  name added while a cluster was stale isn't in its older one. Such a name's
+  slice comes from those fields, marked stale with the reason and its
+  manager unknown, so a validation failure still never makes a name gone. A
+  name already placed by what is read now keeps that place.
+- **A stale slice that names no manager says its manager is unknown**
+  (`known = false`): stale, it may simply not know it (R23).
+- **The published names are checked on a cache hit too**, as hold records
+  are, so a damaged file is reported whether or not the index is rebuilt.

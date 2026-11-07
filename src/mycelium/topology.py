@@ -66,7 +66,8 @@ class Slice:
     """An effective name or `@maintainer`; None for an orphan's head, or when not known."""
     known: bool
     """False when the cluster fails validation and has no last good entry:
-    manager, reports and links are then not known, which is not "none" (R23)."""
+    manager, reports and links are then not known, which is not "none" (R23).
+    The index also sets it False on a stale slice that names no manager."""
     orphan: bool
     """The cluster is outside the root's reach (§5.1)."""
     reports: tuple[str, ...] = ()

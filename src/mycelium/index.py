@@ -11,8 +11,10 @@ not lose lives in state (R28):
 - **hold records** for names that left every cluster, with their last-known
   manager, kept 7 days (KTD7). Ending a hold is `sweep`'s job, not this one's;
 - **the published names**: every name the last rebuild made routable, with
-  its last-known manager, so a name leaves into a hold whether or not its
-  manager was ever known, and a cache wipe reports nothing as added.
+  its last-known manager and its own fields, so a name leaves into a hold
+  whether or not its manager was ever known, a cluster that fails keeps every
+  name it had even with no last good entry, and a cache wipe reports nothing
+  as added.
 
 A validation failure never makes a name gone; a registered home that is gone,
 or holds no cluster.toml, does.
@@ -284,6 +286,12 @@ def _rebuild(
 
     # Snapshots stand in only where no published names were written yet.
     before = _published_from(snapshots) if published_before is None else published_before
+    # A validation failure never makes a name gone: a name published from a cluster
+    # that fails now, and that nothing read now names, keeps what was published of it.
+    for name, entry in before.items():
+        home = entry["agent"]["home"]
+        if name not in slices and home in failing:
+            slices[name] = _unknown(name, entry["agent"], "; ".join(failing[home]))
     published = _publish(slices, before, held_before)
     changes = _changes(before, published, holds, now)
     errors = {home: tuple(reasons) for home, reasons in failing.items()}
@@ -345,7 +353,25 @@ def _build(present, current, snapshots, failing: dict[str, list[str]]):
 
 
 def _stale(found: Slice, reason: str) -> Slice:
-    return replace(found, stale=reason)
+    """`found`, marked stale: with no manager, its manager is then not known,
+    which is not "none" (R23)."""
+    return replace(found, stale=reason, known=found.known and found.manager is not None)
+
+
+def _unknown(name: str, agent: Mapping[str, Any], reason: str) -> Slice:
+    """A name that was published, kept with nothing known of the org but its own fields."""
+    return Slice(
+        name=name,
+        declared_name=agent["declared_name"],
+        home=agent["home"],
+        role=agent["role"],
+        run=agent["run"],
+        mission=agent["mission"],
+        manager=None,
+        known=False,
+        orphan=False,
+        stale=reason,
+    )
 
 
 def _failing_above(home: str, parent: Mapping[str, str], failing: Mapping[str, list[str]]):
@@ -360,18 +386,19 @@ def _failing_above(home: str, parent: Mapping[str, str], failing: Mapping[str, l
 
 
 Published = dict[str, dict[str, Any]]
-"""Each routable name, mapped to its last-known manager: {"manager": ..., "known": ...}."""
+"""Each routable name, mapped to its last-known manager and its own fields:
+{"manager": ..., "known": ..., "agent": {"home": ..., "declared_name": ..., ...}}."""
+
+AGENT_FIELDS = ("home", "declared_name", "role", "run", "mission")
 
 
-def _known(found: Slice) -> bool:
-    """Whether the slice's manager can be taken as the name's manager: a stale
-    slice that has none may simply not know it."""
-    return found.known and (found.stale is None or found.manager is not None)
+def _agent(found: Mapping[str, Any]) -> dict[str, Any]:
+    return {field: found[field] for field in AGENT_FIELDS}
 
 
 def _published_from(snapshots) -> Published:
     return {
-        data["name"]: {"manager": data["manager"], "known": data["known"]}
+        data["name"]: {"manager": data["manager"], "known": data["known"], "agent": _agent(data)}
         for snapshot in snapshots.values()
         for data in snapshot["slices"]
     }
@@ -387,16 +414,17 @@ def _publish(slices: Mapping[str, Slice], before: Published, held: Mapping[str, 
     published = {}
     for name, found in slices.items():
         if name in before:
-            if _known(found) and found.stale is None:
-                published[name] = {"manager": found.manager, "known": True}
+            if found.known and found.stale is None:
+                manager, known = found.manager, True
             else:
-                published[name] = before[name]
-        elif _known(found):
-            published[name] = {"manager": found.manager, "known": True}
+                manager, known = before[name]["manager"], before[name]["known"]
+        elif found.known:
+            manager, known = found.manager, True
         elif name in held and held[name].manager is not None:
-            published[name] = {"manager": held[name].manager, "known": True}
+            manager, known = held[name].manager, True
         else:
-            published[name] = {"manager": None, "known": False}
+            manager, known = None, False
+        published[name] = {"manager": manager, "known": known, "agent": _agent(found.to_json())}
     return published
 
 
@@ -418,7 +446,7 @@ def _changes(before: Published, published: Published, holds: dict[str, Hold], no
         new = published[name]
         if name not in before:
             changes.append(Change("added", name, new=new["manager"], new_known=new["known"]))
-        elif new != before[name]:
+        elif (new["manager"], new["known"]) != (before[name]["manager"], before[name]["known"]):
             old = before[name]
             changes.append(
                 Change(
@@ -479,6 +507,7 @@ class _Files:
             errors = {home: tuple(reasons) for home, reasons in data["errors"].items()}
         except (AttributeError, KeyError, TypeError, ValueError):
             return None
+        self.published()  # damaged, it is reported, as on a rebuild
         return Index(slices, errors, self.holds())
 
     def snapshots(self) -> dict[str, dict[str, Any]]:
@@ -547,8 +576,16 @@ class _Files:
                     raise ValueError(f"the entry for {name!r} has no known flag")
                 if manager is not None and not isinstance(manager, str):
                     raise ValueError(f"{name} has a manager that isn't a name")
+                agent = entry["agent"]
+                if not all(
+                    isinstance(agent[field], str) for field in AGENT_FIELDS if field != "role"
+                ):
+                    raise ValueError(f"the entry for {name!r} has fields that aren't text")
+                if agent["role"] is not None and not isinstance(agent["role"], str):
+                    raise ValueError(f"the entry for {name!r} has a role that isn't text")
             return {
-                name: {"manager": e["manager"], "known": e["known"]} for name, e in names.items()
+                name: {"manager": e["manager"], "known": e["known"], "agent": _agent(e["agent"])}
+                for name, e in names.items()
             }
         except (AttributeError, KeyError, TypeError, ValueError) as error:
             raise IndexUnavailable(
