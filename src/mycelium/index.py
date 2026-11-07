@@ -424,7 +424,7 @@ def _publish(slices: Mapping[str, Slice], before: Published, held: Mapping[str, 
             manager, known = held[name].manager, True
         else:
             manager, known = None, False
-        published[name] = {"manager": manager, "known": known, "agent": _agent(found.to_json())}
+        published[name] = {"manager": manager, "known": known, "agent": _agent(vars(found))}
     return published
 
 
