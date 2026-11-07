@@ -65,11 +65,11 @@ class Slice:
     manager: str | None
     """An effective name or `@maintainer`; None for an orphan's head, or when not known."""
     known: bool
-    """False when the manager isn't known, which is not "none" (R23). Here,
-    the cluster fails validation and has no last good entry, so reports and
-    links aren't known either. The index also sets it False on a stale slice
-    that names no manager, whose reports and links are still its last ones,
-    and on a name it kept from what it last published."""
+    """False when the manager isn't known, which is not "none" (R23). For a
+    failing cluster with no last good entry (`unknown`), and for a name the
+    index kept from what it last published, nothing else of the org is known
+    either: empty reports and links then mean not known, not none. A stale
+    slice that names no manager is also False, and keeps its reports and links."""
     orphan: bool
     """The cluster is outside the root's reach (§5.1)."""
     reports: tuple[str, ...] = ()
