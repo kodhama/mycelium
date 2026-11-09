@@ -44,6 +44,8 @@ HARNESSES = ("claude", "codex")
 UNSUPPORTED = ("droid", "opencode")
 """Harnesses recognised in the walk but left unbound (U13, and a probe if Droid returns)."""
 
+_KNOWN = HARNESSES + UNSUPPORTED
+
 PS_COMMAND = ("ps", "-axww", "-o", "pid=,ppid=,comm=")
 
 # A hook runs this inside its harness's hook timeout.
@@ -183,9 +185,6 @@ def resolve(
         return Caller("codex", None, thread, None, "walk", reason)
     reason = None if thread is not None else "CODEX_THREAD_ID is not set, so the session is unknown"
     return Caller("codex", harness.pid, thread, nested, "walk", reason)
-
-
-_KNOWN = HARNESSES + UNSUPPORTED
 
 
 def _ancestors(procs: Mapping[int, Proc], pid: int) -> list[Proc]:
