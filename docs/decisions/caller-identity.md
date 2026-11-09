@@ -62,7 +62,9 @@ token can't be told from one a nested child inherited.
 - **The daemon is recognised by its exec name, which is unverified.**
   macOS `comm` is how a process was exec'd. If Codex starts the daemon
   without its path, nothing marks it, and a TUI's tools read as a
-  `codex exec` with the shared pid and `nested` true. No live Codex was run
+  `codex exec` with the shared pid: `nested` true while the TUI that
+  started the daemon is still its parent, and false once launchd has
+  adopted it (an inference; not probed). No live Codex was run
   to check this; the path comes from the U2 probe. Plan U11 confirms it on
   a live Codex and changes the rule if needed (lead ruling, GRO-49). Linux
   `comm` is always a short name, so there the mark never matches.
