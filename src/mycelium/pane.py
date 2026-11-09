@@ -26,9 +26,11 @@ herdr 0.9.3, probed live on 2026-11-09:
   no agent record.
 
 The module exposes the pane's title and the agent record's name side by side
-and chooses neither: which one is the launch name is U4b's rule. The terminal
-id is reported, never used as a key (lessons C1). Every other herdr failure
-raises `PaneUnavailable`, as `clusters.HelperUnavailable` does for its helper.
+and chooses neither: which one is the launch name is U4b's rule. The name is
+kept only when the agent record's session is the pane's, since the two are
+read by separate calls. The terminal id is reported, never used as a key
+(lessons C1). Every other herdr failure raises `PaneUnavailable`, as
+`clusters.HelperUnavailable` does for its helper.
 """
 
 import json
@@ -73,7 +75,8 @@ class PaneIdentity:
     terminal_id: str | None
     """Reported for display; never a key (lessons C1)."""
     agent_name: str | None
-    """The live name from `agent get`; `None` when herdr holds no agent record (lessons C2)."""
+    """The live name from `agent get`; `None` when herdr holds no agent record (lessons C2)
+    or the record's session is not the pane's."""
 
 
 def read_identity(
@@ -86,13 +89,14 @@ def read_identity(
     agent = _ask(command, ("agent", "get", pane_id), timeout, missing="agent_not_found")
     try:
         record = _object(result.get("pane"), "pane")
-        session = record.get("agent_session")
-        session_id = None
-        if session is not None:
-            session_id = _optional_text(_object(session, "agent_session").get("value"), "session")
+        session_id = _session(record)
         agent_name = None
         if agent is not None:
-            agent_name = _optional_text(_object(agent.get("agent"), "agent").get("name"), "name")
+            agent_record = _object(agent.get("agent"), "agent")
+            # Two calls: a pane replaced between them, or a record stale after /clear,
+            # must not pair this session's id with another session's name.
+            if _session(agent_record) == session_id:
+                agent_name = _optional_text(agent_record.get("name"), "name")
         return PaneIdentity(
             pane_id=_text(record.get("pane_id"), "pane_id"),
             agent=_optional_text(record.get("agent"), "agent"),
@@ -181,6 +185,14 @@ def find_pane(
     if unread:
         raise PaneUnavailable(f"no readable pane holds pid {pid}; unreadable: {'; '.join(unread)}")
     return None
+
+
+def _session(record: dict[str, Any]) -> str | None:
+    """A pane or agent record's `agent_session.value`; None when it has none."""
+    session = record.get("agent_session")
+    if session is None:
+        return None
+    return _optional_text(_object(session, "agent_session").get("value"), "session")
 
 
 def _pane_ids(command: Sequence[str], timeout: float) -> list[str]:

@@ -360,6 +360,22 @@ def test_an_agent_lookup_error_other_than_not_found_is_reported(herdr, tmp_path,
         read_identity("w1:p1", command=HERDR)
 
 
+@pytest.mark.parametrize("agent_session", ["00000000-0000-0000-0000-0000000000ff", None])
+def test_an_agent_record_for_another_session_gives_no_agent_name(
+    herdr, tmp_path, monkeypatch, agent_session
+):
+    # pane get and agent get are two calls: a pane replaced between them, or a record left
+    # stale by /clear, must not pair one session's id with another's name.
+    stale = agent_record(BOUND, "role-02")
+    if agent_session is None:
+        del stale["agent_session"]
+    else:
+        stale["agent_session"] = stale["agent_session"] | {"value": agent_session}
+    with_state(tmp_path, monkeypatch, agents=[stale])
+    identity = read_identity("w1:p1", command=HERDR)
+    assert (identity.agent_session_id, identity.agent_name) == (SESSION, None)
+
+
 def test_empty_values_read_as_none(herdr, tmp_path, monkeypatch):
     blank = pane("w4:p1", agent="claude", session="", title="")
     with_state(tmp_path, monkeypatch, panes=[blank], agents=[agent_record(blank, "")])
@@ -386,6 +402,17 @@ def test_a_stalled_herdr_ends_the_scan_within_one_timeout(herdr, tmp_path, monke
     with pytest.raises(PaneUnavailable):
         find_pane(2001, command=HERDR, timeout=1.0)
     assert time.monotonic() - started < 1.9
+
+
+def test_a_scan_of_slow_panes_shares_one_deadline(herdr, tmp_path, monkeypatch):
+    # Every call answers, each after 0.8 s, so no single call outlasts a 1 s timeout. The
+    # list takes 0.8 s of the scan's 1 s, and only a shared deadline cuts the first pane's
+    # read at 1 s; a read given its own full timeout would run on to about 1.7 s.
+    with_state(tmp_path, monkeypatch, delay=0.8)
+    started = time.monotonic()
+    with pytest.raises(PaneUnavailable, match="did not answer"):
+        find_pane(9999, command=HERDR, timeout=1.0)
+    assert time.monotonic() - started < 1.4
 
 
 def test_a_title_with_glyphs_reads_whole(herdr, tmp_path, monkeypatch):

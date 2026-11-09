@@ -56,9 +56,13 @@ token can't be told from one a nested child inherited.
 
 **Known limits:**
 
-- **An inherited thread id.** A Claude started inside a Codex session
-  inherits `CODEX_THREAD_ID`. Where `ps` is denied, that Claude reads as
-  Codex.
+- **An inherited thread id.** Each harness inherits the other's variables,
+  so where `ps` is denied, `CODEX_THREAD_ID` beside a Claude marker
+  (`CLAUDE_PID` or `CLAUDE_CODE_SESSION_ID`) means one runs inside the other,
+  whichever way round. That caller resolves as nested and unbound, never as
+  the outer Codex session. A caller with no Claude marker still reads as
+  Codex with nesting unknown, so with no walk a Codex inside a Codex is not
+  caught.
 - **The daemon is recognised by its exec name, which is unverified.**
   macOS `comm` is how a process was exec'd. If Codex starts the daemon
   without its path, nothing marks it, and a TUI's tools read as a
@@ -89,7 +93,10 @@ Probed live against herdr 0.9.3:
   no name.
 - **Agent records:** `agent get` adds `name`, the live agent name. herdr
   holds no record for a pane without an agent, and lessons C2 says the
-  record may not exist yet at SessionStart.
+  record may not exist yet at SessionStart. `pane get` and `agent get` are
+  separate calls, so the name is kept only when the agent record's session
+  is the pane's: a pane replaced between them, or a record left stale by
+  `/clear`, gives no name.
 - **Process info:** `pane process-info --pane <id>` lists the foreground
   processes, each with `pid`, `name`, `argv` and `cwd`, plus `shell_pid`.
   This is the T9 check's source. A pane herdr could not restore (it carries

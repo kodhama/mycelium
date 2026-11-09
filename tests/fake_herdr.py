@@ -22,7 +22,9 @@ as an error in the tests.
 
 FAKE_HERDR_FAIL makes every call fail: `exit` (exit 3, a line on stderr),
 `garbage` (non-JSON, exit 0), `error` (a JSON error herdr would not mean as
-not-found, exit 1) or `sleep` (outlast any test timeout). FAKE_HERDR_LOG, when
+not-found, exit 1) or `sleep` (outlast any test timeout). In the state file,
+`delay` makes every call answer only after that many seconds, `slow` lists
+calls that hang, and `broken` lists calls that fail. FAKE_HERDR_LOG, when
 set, names a file that gets one JSON line per call's arguments.
 """
 
@@ -50,6 +52,7 @@ def by_pane(records: list[dict], pane_id: str) -> dict | None:
 
 def answer(argv: list[str], state: dict) -> int:
     panes = state.get("panes", [])
+    time.sleep(state.get("delay", 0))  # every call answers, but only after this many seconds
     if argv in state.get("slow", []):  # this one call hangs, as a stalled herdr would
         time.sleep(30)
         return 0

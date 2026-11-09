@@ -26,8 +26,12 @@ as the caller. The rules come from hq `areas/agent-comms/research/probes-u2.md`
 - **Nesting:** another harness-named process above the caller's harness pid.
 - **No process table** (`ps` denied in Codex's sandbox, missing, or slow):
   `CODEX_THREAD_ID` identifies a Codex caller with pid and nesting unknown;
-  otherwise the caller is unbound. Known limit: a Claude started inside a Codex
-  session inherits `CODEX_THREAD_ID`, so with no walk it reads as Codex.
+  otherwise the caller is unbound. Each harness inherits the other's
+  variables, so `CODEX_THREAD_ID` beside a Claude marker (`CLAUDE_PID` or
+  `CLAUDE_CODE_SESSION_ID`) means one runs inside the other, whichever way
+  round: that caller is nested, so it is unbound. Known limit: with no walk,
+  a caller with no Claude marker reads as Codex with nesting unknown, so a
+  Codex inside a Codex is not caught.
 
 `source` says what the answer rests on: `walk` whenever the walk ran,
 `codex-thread-id` when only the fallback identified the caller, and `none`
@@ -160,6 +164,12 @@ def resolve(
         procs = table()
     except ProcessTableUnavailable as error:
         why = f"the process walk could not run ({error})"
+        if thread is not None and _claude_marker(env):
+            return _unbound(
+                f"{why}; CODEX_THREAD_ID sits beside a Claude marker, so one harness runs "
+                "inside the other and the caller is nested",
+                source="none",
+            )
         if thread is not None:
             reason = f"{why}; CODEX_THREAD_ID names the session, so pid and nesting are unknown"
             return Caller("codex", None, thread, None, "codex-thread-id", reason)
@@ -214,6 +224,10 @@ def _ancestors(procs: Mapping[int, Proc], pid: int) -> list[Proc]:
 
 def _unbound(reason: str, source: str = "walk") -> Caller:
     return Caller(None, None, None, None, source, reason)
+
+
+def _claude_marker(env: Mapping[str, str]) -> bool:
+    return any(_value(env, key) for key in ("CLAUDE_PID", "CLAUDE_CODE_SESSION_ID"))
 
 
 def _value(env: Mapping[str, str], key: str) -> str | None:

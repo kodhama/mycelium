@@ -239,6 +239,30 @@ def test_without_a_process_table_or_a_thread_id_the_caller_is_unbound():
     assert "operation not permitted" in caller.reason
 
 
+@pytest.mark.parametrize(
+    "marker",
+    [
+        {"CLAUDE_PID": "700"},
+        {"CLAUDE_CODE_SESSION_ID": CLAUDE_SESSION},
+        {"CLAUDE_PID": "700", "CLAUDE_CODE_SESSION_ID": CLAUDE_SESSION},
+    ],
+)
+def test_without_a_process_table_a_claude_marker_beside_a_thread_id_is_nested_and_unbound(marker):
+    # Each harness inherits the other's variables (probes-u2), so with no walk a Claude
+    # marker beside CODEX_THREAD_ID means one runs inside the other, whichever way round.
+    caller = resolve(env={"CODEX_THREAD_ID": CODEX_THREAD, **marker}, pid=SELF, table=denied)
+
+    assert (caller.harness, caller.pid, caller.session_id, caller.source) == (
+        None,
+        None,
+        None,
+        "none",
+    )
+    assert not caller.resolved
+    assert "could not run" in caller.reason
+    assert "nested" in caller.reason
+
+
 # Scenario 8: Droid or opencode nearest.
 @pytest.mark.parametrize("name", UNSUPPORTED)
 def test_an_unsupported_harness_nearest_is_unbound_and_named(name):
