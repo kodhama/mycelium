@@ -165,11 +165,11 @@ def resolve(
     except ProcessTableUnavailable as error:
         why = f"the process walk could not run ({error})"
         if thread is not None and _claude_marker(env):
-            return _unbound(
+            reason = (
                 f"{why}; CODEX_THREAD_ID sits beside a Claude marker, so one harness runs "
-                "inside the other and the caller is nested",
-                source="none",
+                "inside the other and the caller is nested"
             )
+            return Caller(None, None, None, True, "none", reason)
         if thread is not None:
             reason = f"{why}; CODEX_THREAD_ID names the session, so pid and nesting are unknown"
             return Caller("codex", None, thread, None, "codex-thread-id", reason)

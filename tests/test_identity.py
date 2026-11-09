@@ -252,10 +252,11 @@ def test_without_a_process_table_a_claude_marker_beside_a_thread_id_is_nested_an
     # marker beside CODEX_THREAD_ID means one runs inside the other, whichever way round.
     caller = resolve(env={"CODEX_THREAD_ID": CODEX_THREAD, **marker}, pid=SELF, table=denied)
 
-    assert (caller.harness, caller.pid, caller.session_id, caller.source) == (
+    assert (caller.harness, caller.pid, caller.session_id, caller.nested, caller.source) == (
         None,
         None,
         None,
+        True,
         "none",
     )
     assert not caller.resolved

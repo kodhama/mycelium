@@ -405,14 +405,15 @@ def test_a_stalled_herdr_ends_the_scan_within_one_timeout(herdr, tmp_path, monke
 
 
 def test_a_scan_of_slow_panes_shares_one_deadline(herdr, tmp_path, monkeypatch):
-    # Every call answers, each after 0.8 s, so no single call outlasts a 1 s timeout. The
-    # list takes 0.8 s of the scan's 1 s, and only a shared deadline cuts the first pane's
-    # read at 1 s; a read given its own full timeout would run on to about 1.7 s.
-    with_state(tmp_path, monkeypatch, delay=0.8)
+    # Every call answers, each after 1.6 s, so no single call outlasts a 2 s timeout. The
+    # list takes 1.6 s of the scan's 2 s, and only a shared deadline cuts the first pane's
+    # read at 2 s; a read given its own full timeout would run on to about 3.3 s. The
+    # 0.4 s left after the list is the room the fake has to start on a slow runner.
+    with_state(tmp_path, monkeypatch, delay=1.6)
     started = time.monotonic()
     with pytest.raises(PaneUnavailable, match="did not answer"):
-        find_pane(9999, command=HERDR, timeout=1.0)
-    assert time.monotonic() - started < 1.4
+        find_pane(9999, command=HERDR, timeout=2.0)
+    assert time.monotonic() - started < 2.8
 
 
 def test_a_title_with_glyphs_reads_whole(herdr, tmp_path, monkeypatch):
