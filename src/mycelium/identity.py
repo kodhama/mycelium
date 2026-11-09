@@ -29,7 +29,8 @@ as the caller. The rules come from hq `areas/agent-comms/research/probes-u2.md`
   otherwise the caller is unbound. Each harness inherits the other's
   variables, so `CODEX_THREAD_ID` beside a Claude marker (`CLAUDE_PID` or
   `CLAUDE_CODE_SESSION_ID`) means one runs inside the other, whichever way
-  round: that caller is nested, so it is unbound. Known limit: with no walk,
+  round: that caller is nested, so it is unbound (a marker inherited from
+  wherever the shell started reads the same). Known limit: with no walk,
   a caller with no Claude marker reads as Codex with nesting unknown, so a
   Codex inside a Codex is not caught.
 

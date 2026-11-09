@@ -95,7 +95,8 @@ an argument.** It climbs from its own process to the nearest harness.
   one shared daemon.
 - **A session started inside another one** is reported as nested. Where
   `ps` is denied, `CODEX_THREAD_ID` beside a Claude variable means one runs
-  inside the other, so that caller is nested and unbound.
+  inside the other, so that caller is nested and unbound. A variable
+  inherited from wherever the shell started reads the same.
 - **A Codex TUI is recognised by its shared daemon's path, on macOS.** That
   Codex starts the daemon by its path is not yet confirmed on a live Codex
   (plan U11 checks it). Linux `ps` shows no path, so there it is never
