@@ -84,6 +84,23 @@ decision, and rebuilds the index when any cluster's revision changes.
   Damaged hold or published-name records, or a state or cache folder that
   can't be read or written, stop the index with an error, never an empty list.
 
+## Who is calling
+
+**mycelium tells which session called it from the process tree, never from
+an argument.** It climbs from its own process to the nearest harness.
+
+- **Claude Code** is identified by its `claude` process.
+- **Codex** is identified by the thread id it sets, `CODEX_THREAD_ID`.
+  Inside Codex's sandbox `ps` is denied, and a Codex TUI runs its tools under
+  one shared daemon.
+- **A session started inside another one** is reported as nested.
+- **Droid and opencode** callers resolve as unbound for now.
+
+herdr panes are read through one module, which only reads: a pane's identity,
+its foreground processes, and the pane that holds a given process. It was
+built against herdr 0.9.3. The rules and their limits are in
+[the decision](docs/decisions/caller-identity.md).
+
 ## What the store survives
 
 **A stored message survives the posting process crashing or being killed.
