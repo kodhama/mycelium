@@ -13,10 +13,10 @@ as the caller. The rules come from hq `areas/agent-comms/research/probes-u2.md`
 - **Claude:** the harness pid is that `claude`. A nested Claude replaces
   `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID`, so the session id is taken only
   when `CLAUDE_PID` names that pid; an inherited value is never trusted.
-- **Codex TUI:** a TUI runs its tools under the shared app-server daemon: a
-  `codex` whose `comm` path holds `app-server-daemon`, or whose parent is a
-  `codex` (the TUI that started it; a codex exec always runs under a tool
-  shell). The daemon proves no session's
+- **Codex TUI:** a TUI runs its tools under the shared app-server daemon, a
+  `codex` whose `comm` path holds `app-server-daemon` (probes S3 Codex). A codex
+  parent alone does not mark it: a tool shell given one command replaces
+  itself, so a nested `codex exec` can sit directly under the daemon. The daemon proves no session's
   liveness, so the pid is unknown, the session is `CODEX_THREAD_ID`, and
   nesting is undecidable; the daemon and the TUI that started it never count
   as nesting.
@@ -32,7 +32,8 @@ as the caller. The rules come from hq `areas/agent-comms/research/probes-u2.md`
 `source` says what the answer rests on: `walk` whenever the walk ran,
 `codex-thread-id` when only the fallback identified the caller, and `none`
 when neither did. macOS `comm` is how a process was exec'd, so a daemon
-launchd adopted, exec'd without its path, reads as a codex exec. The walk
+exec'd without its path reads as a codex exec; that is unverified on a live
+Codex (docs/decisions/caller-identity.md). The walk
 guards against mislabelling, not attack: a same-user process sets its own
 name (docs/decisions/caller-identity.md).
 """
@@ -186,8 +187,7 @@ def resolve(
         else:
             reason = None
         return Caller("claude", harness.pid, session, nested, "walk", reason)
-    parent = procs.get(harness.ppid)
-    if DAEMON_MARK in harness.comm or (parent is not None and parent.name == "codex"):
+    if DAEMON_MARK in harness.comm:
         if thread is None:
             return _unbound(
                 "a Codex TUI caller (under the shared app-server daemon) without CODEX_THREAD_ID"

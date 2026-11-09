@@ -345,16 +345,11 @@ def test_ps_is_run_by_absolute_path_so_path_cannot_hide_or_replace_it():
     assert PS_COMMAND[0] == "/bin/ps"
 
 
-def test_a_daemon_started_by_bare_name_is_known_by_its_codex_parent():
-    # macOS `comm` is how the process was exec'd, so the daemon's path is not
-    # guaranteed. A codex whose parent is a codex is the daemon its TUI started:
-    # a codex exec always runs under a tool shell.
-    table = chain("/bin/bash", "codex", "codex", "-zsh")
+def test_a_codex_exec_a_tui_tool_shell_replaced_sits_under_the_daemon_and_is_nested():
+    # `zsh -lc 'codex exec ...'` replaces the shell with the exec, so the exec's
+    # parent is the daemon itself. A codex parent therefore does not mark a daemon;
+    # only the daemon's path does.
+    table = chain("/bin/bash", "/opt/tools/codex", DAEMON, "codex", "-zsh")
     caller = walk(table, {"CODEX_THREAD_ID": CODEX_THREAD})
 
-    assert (caller.harness, caller.pid, caller.session_id, caller.nested) == (
-        "codex",
-        None,
-        CODEX_THREAD,
-        None,
-    )
+    assert (caller.harness, caller.pid, caller.nested) == ("codex", 700, True)

@@ -30,9 +30,10 @@ so the desktop app `Claude` is not a harness.
   so the session stays unknown (probes S3 Claude).
 - **Codex under the shared app-server daemon**: this is a Codex TUI's tool
   call. The daemon is a `codex` whose `comm` path holds `app-server-daemon`,
-  or whose parent is a `codex`, the TUI that started it. macOS `comm` is how
-  a process was exec'd, so the path alone is not guaranteed. A `codex exec`
-  always runs under a tool shell, never directly under a `codex`. The session is
+  as the U2 probe recorded. A `codex` parent alone does not mark it. A tool
+  shell given one command (`zsh -lc 'codex exec …'`) replaces itself, so a
+  nested `codex exec` can sit directly under the daemon, and it must still
+  read as nested. The session is
   `CODEX_THREAD_ID`, which the 2026-10-29 ruling counts as KTD5's fallback.
   The pid is unknown, because the daemon is shared and proves no one
   session's liveness. Nesting is unknown too: the daemon's ancestors belong
@@ -58,11 +59,12 @@ token can't be told from one a nested child inherited.
 - **An inherited thread id.** A Claude started inside a Codex session
   inherits `CODEX_THREAD_ID`. Where `ps` is denied, that Claude reads as
   Codex.
-- **A daemon whose starting TUI has exited.** If launchd adopts the daemon
-  and its exec name holds no `app-server-daemon`, nothing marks it, and a
-  TUI's tools read as a `codex exec` with the shared pid. No live Codex
-  daemon was available to check how it is exec'd; the path comes from the
-  U2 probe.
+- **The daemon is recognised by its exec name, which is unverified.**
+  macOS `comm` is how a process was exec'd. If Codex starts the daemon
+  without its path, nothing marks it, and a TUI's tools read as a
+  `codex exec` with the shared pid and `nested` true. No live Codex was run
+  to check this; the path comes from the U2 probe. Linux `comm` is always a
+  short name.
 - **The walk guards against mislabelling, not attack.** On macOS a process
   sets the name `ps` shows. A same-user process can exec itself as `codex`
   and set `CODEX_THREAD_ID` to pose as a session. The hub plan's scope
@@ -95,8 +97,10 @@ Probed live against herdr 0.9.3:
 `mycelium.pane` exposes the title and the agent name side by side. Which one
 counts as the herdr name is U4b's launch-name rule. It accepts an
 `HERDR_PANE_ID` hint only when that pane's foreground holds the pid, and
-otherwise scans the panes. The scan skips a pane herdr can't read. If no
-other pane holds the pid, it raises rather than answer "no pane" on a guess.
+otherwise scans the panes. The scan skips a pane herdr can't read, the hint
+included. If no other pane holds the pid, it raises, naming each unreadable
+pane and why, rather than answer "no pane" on a guess. The whole lookup
+shares one timeout, and a stalled herdr ends it.
 Over 52 live panes a full scan took about 0.4 s. An empty title, name or
 session id reads as none. herdr is found through `PATH`, which the hook's
 harness supplies; launchd's `PATH` lacks Homebrew (lessons T9). It reports `terminal_id` but never keys on it,

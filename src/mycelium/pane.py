@@ -33,6 +33,7 @@ raises `PaneUnavailable`, as `clusters.HelperUnavailable` does for its helper.
 
 import json
 import subprocess
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -45,6 +46,10 @@ TIMEOUT_SECONDS = 5.0
 
 class PaneUnavailable(Exception):
     """herdr could not be run, or its answer was not the expected shape."""
+
+
+class _Stalled(PaneUnavailable):
+    """herdr did not answer in time; a scan stops rather than wait on every pane."""
 
 
 @dataclass(frozen=True)
@@ -150,20 +155,31 @@ def find_pane(
     value alone proves nothing (lessons C2). Otherwise every listed pane is
     checked. A pane herdr can't read is skipped, and if no other pane holds the
     pid, the scan raises PaneUnavailable rather than answer None on a guess.
+    The whole lookup shares one `timeout`, since a hook runs it inside its
+    harness's own; running out raises PaneUnavailable.
     """
-    if hint and foreground_is(hint, pid, command=command, timeout=timeout):
-        return hint
+    deadline = time.monotonic() + timeout
     unread: list[str] = []
-    for pane_id in _pane_ids(command, timeout):
-        if pane_id == hint:
-            continue
+
+    def holds(pane_id: str) -> bool:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise _Stalled(f"herdr did not answer within {timeout:g}s")
         try:
-            if foreground_is(pane_id, pid, command=command, timeout=timeout):
-                return pane_id
-        except PaneUnavailable:  # one pane herdr can't read must not hide the others
-            unread.append(pane_id)
+            return foreground_is(pane_id, pid, command=command, timeout=left)
+        except _Stalled:
+            raise  # a stalled herdr stalls every pane: stop here
+        except PaneUnavailable as error:  # one pane herdr can't read must not hide the others
+            unread.append(f"{pane_id} ({error})")
+            return False
+
+    if hint and holds(hint):
+        return hint
+    for pane_id in _pane_ids(command, max(deadline - time.monotonic(), 0.001)):
+        if pane_id != hint and holds(pane_id):
+            return pane_id
     if unread:
-        raise PaneUnavailable(f"no readable pane holds pid {pid}; unreadable: {', '.join(unread)}")
+        raise PaneUnavailable(f"no readable pane holds pid {pid}; unreadable: {'; '.join(unread)}")
     return None
 
 
@@ -195,7 +211,7 @@ def _ask(
     except FileNotFoundError:
         raise PaneUnavailable(f"herdr ({name}) is not installed") from None
     except subprocess.TimeoutExpired:
-        raise PaneUnavailable(f"herdr did not answer within {timeout:g}s") from None
+        raise _Stalled(f"herdr did not answer within {timeout:g}s") from None
     except OSError as error:  # not executable, or not a program this system can run
         raise PaneUnavailable(f"herdr ({name}) can't be run: {error}") from None
     if done.returncode != 0:

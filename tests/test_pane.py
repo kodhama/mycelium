@@ -1,6 +1,7 @@
 import ast
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -364,3 +365,30 @@ def test_empty_values_read_as_none(herdr, tmp_path, monkeypatch):
     with_state(tmp_path, monkeypatch, panes=[blank], agents=[agent_record(blank, "")])
     identity = read_identity("w4:p1", command=HERDR)
     assert (identity.title, identity.agent_session_id, identity.agent_name) == (None, None, None)
+
+
+def test_an_unreadable_hint_falls_through_to_the_scan(herdr, tmp_path, monkeypatch):
+    with_state(tmp_path, monkeypatch, broken=[["pane", "process-info", "--pane", "w2:p1"]])
+    assert find_pane(1001, hint="w2:p1", command=HERDR) == "w1:p1"
+
+
+def test_a_scan_that_finds_nothing_names_why_each_pane_was_unreadable(herdr, tmp_path, monkeypatch):
+    with_state(tmp_path, monkeypatch, broken=[["pane", "process-info", "--pane", "w2:p1"]])
+    with pytest.raises(PaneUnavailable, match=r"w2:p1 \(.*read failed"):
+        find_pane(9999, command=HERDR)
+
+
+def test_a_stalled_herdr_ends_the_scan_within_one_timeout(herdr, tmp_path, monkeypatch):
+    # A hook runs the scan inside its harness's timeout: the whole scan shares one.
+    slow = [["pane", "process-info", "--pane", pane_id] for pane_id in ("w2:p1", "w1:p1")]
+    with_state(tmp_path, monkeypatch, slow=slow)
+    started = time.monotonic()
+    with pytest.raises(PaneUnavailable):
+        find_pane(2001, command=HERDR, timeout=1.0)
+    assert time.monotonic() - started < 1.9
+
+
+def test_a_title_with_glyphs_reads_whole(herdr, tmp_path, monkeypatch):
+    glyphs = pane("w5:p1", agent="claude", session=SESSION, title="◑ role-01 ✳")
+    with_state(tmp_path, monkeypatch, panes=[glyphs], agents=[])
+    assert read_identity("w5:p1", command=HERDR).title == "◑ role-01 ✳"

@@ -50,6 +50,9 @@ def by_pane(records: list[dict], pane_id: str) -> dict | None:
 
 def answer(argv: list[str], state: dict) -> int:
     panes = state.get("panes", [])
+    if argv in state.get("slow", []):  # this one call hangs, as a stalled herdr would
+        time.sleep(30)
+        return 0
     if argv in state.get("broken", []):  # this one call fails as a herdr fault would
         error = {"error": {"code": "internal", "message": "read failed"}, "id": "cli:x"}
         print(json.dumps(error), file=sys.stderr)
