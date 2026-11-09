@@ -1,4 +1,4 @@
-"""A test-only stand-in for herdr 0.9.3's read commands (GRO-49 plan, U4a, tests/test_pane.py).
+"""A test-only stand-in for herdr 0.9.3's read commands, for tests/test_pane.py.
 
 It answers only the reads `mycelium.pane` makes, in the reply shapes probed
 live from herdr 0.9.3 on 2026-11-09, from a JSON state file that
@@ -50,6 +50,10 @@ def by_pane(records: list[dict], pane_id: str) -> dict | None:
 
 def answer(argv: list[str], state: dict) -> int:
     panes = state.get("panes", [])
+    if argv in state.get("broken", []):  # this one call fails as a herdr fault would
+        error = {"error": {"code": "internal", "message": "read failed"}, "id": "cli:x"}
+        print(json.dumps(error), file=sys.stderr)
+        return 1
     match argv:
         case ["pane", "list"]:
             return reply("pane:list", {"panes": panes, "type": "pane_list"})

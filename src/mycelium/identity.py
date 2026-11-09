@@ -13,8 +13,10 @@ as the caller. The rules come from hq `areas/agent-comms/research/probes-u2.md`
 - **Claude:** the harness pid is that `claude`. A nested Claude replaces
   `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID`, so the session id is taken only
   when `CLAUDE_PID` names that pid; an inherited value is never trusted.
-- **Codex TUI:** a TUI runs its tools under the shared app-server daemon (its
-  `comm` path holds `app-server-daemon`). The daemon proves no session's
+- **Codex TUI:** a TUI runs its tools under the shared app-server daemon: a
+  `codex` whose `comm` path holds `app-server-daemon`, or whose parent is a
+  `codex` (the TUI that started it; a codex exec always runs under a tool
+  shell). The daemon proves no session's
   liveness, so the pid is unknown, the session is `CODEX_THREAD_ID`, and
   nesting is undecidable; the daemon and the TUI that started it never count
   as nesting.
@@ -29,8 +31,10 @@ as the caller. The rules come from hq `areas/agent-comms/research/probes-u2.md`
 
 `source` says what the answer rests on: `walk` whenever the walk ran,
 `codex-thread-id` when only the fallback identified the caller, and `none`
-when neither did. The daemon is told apart by its path, which macOS `ps`
-prints in `comm`; Linux `ps` prints only a short name there.
+when neither did. macOS `comm` is how a process was exec'd, so a daemon
+launchd adopted, exec'd without its path, reads as a codex exec. The walk
+guards against mislabelling, not attack: a same-user process sets its own
+name (docs/decisions/caller-identity.md).
 """
 
 import os
@@ -46,7 +50,8 @@ UNSUPPORTED = ("droid", "opencode")
 
 _KNOWN = HARNESSES + UNSUPPORTED
 
-PS_COMMAND = ("ps", "-axww", "-o", "pid=,ppid=,comm=")
+# By absolute path: through PATH, a caller could hide `ps` and force the thread-id fallback.
+PS_COMMAND = ("/bin/ps", "-axww", "-o", "pid=,ppid=,comm=")
 
 # A hook runs this inside its harness's hook timeout.
 TIMEOUT_SECONDS = 2.0
@@ -139,7 +144,12 @@ def resolve(
     pid: int | None = None,
     table: Callable[[], Mapping[int, Proc]] = process_table,
 ) -> Caller:
-    """The caller of process `pid` (this process by default), from the process walk."""
+    """The caller of process `pid` (this process by default), from the process walk.
+
+    `env` must be that same process's environment (this one's by default): the
+    Claude session and Codex thread checks read it. Test `resolved`, not `reason`:
+    a resolved caller can carry a reason naming what stays unknown.
+    """
     env = os.environ if env is None else env
     pid = os.getpid() if pid is None else pid
     thread = _value(env, "CODEX_THREAD_ID")
@@ -176,7 +186,8 @@ def resolve(
         else:
             reason = None
         return Caller("claude", harness.pid, session, nested, "walk", reason)
-    if DAEMON_MARK in harness.comm:
+    parent = procs.get(harness.ppid)
+    if DAEMON_MARK in harness.comm or (parent is not None and parent.name == "codex"):
         if thread is None:
             return _unbound(
                 "a Codex TUI caller (under the shared app-server daemon) without CODEX_THREAD_ID"

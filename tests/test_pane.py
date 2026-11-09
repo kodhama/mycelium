@@ -331,3 +331,36 @@ def test_no_module_but_pane_names_the_herdr_command():
         if path != SOURCE / "pane.py" and names_herdr(path)
     ]
     assert offenders == []
+
+
+# Review fixes (GRO-49).
+def with_state(tmp_path, monkeypatch, **changes) -> None:
+    state = tmp_path / "herdr-state-changed.json"
+    state.write_text(json.dumps(STATE | changes))
+    monkeypatch.setenv("FAKE_HERDR_STATE", str(state))
+
+
+def test_one_unreadable_pane_does_not_stop_the_scan(herdr, tmp_path, monkeypatch):
+    # w2:p1 is listed before the pane that holds the pid, and its read fails.
+    with_state(tmp_path, monkeypatch, broken=[["pane", "process-info", "--pane", "w2:p1"]])
+    assert find_pane(1001, command=HERDR) == "w1:p1"
+
+
+def test_a_scan_that_finds_nothing_after_skipping_a_pane_says_so(herdr, tmp_path, monkeypatch):
+    # "No pane holds it" would be a guess when one pane could not be read.
+    with_state(tmp_path, monkeypatch, broken=[["pane", "process-info", "--pane", "w2:p1"]])
+    with pytest.raises(PaneUnavailable, match="w2:p1"):
+        find_pane(9999, command=HERDR)
+
+
+def test_an_agent_lookup_error_other_than_not_found_is_reported(herdr, tmp_path, monkeypatch):
+    with_state(tmp_path, monkeypatch, broken=[["agent", "get", "w1:p1"]])
+    with pytest.raises(PaneUnavailable, match="read failed"):
+        read_identity("w1:p1", command=HERDR)
+
+
+def test_empty_values_read_as_none(herdr, tmp_path, monkeypatch):
+    blank = pane("w4:p1", agent="claude", session="", title="")
+    with_state(tmp_path, monkeypatch, panes=[blank], agents=[agent_record(blank, "")])
+    identity = read_identity("w4:p1", command=HERDR)
+    assert (identity.title, identity.agent_session_id, identity.agent_name) == (None, None, None)

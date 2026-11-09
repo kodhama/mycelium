@@ -28,8 +28,11 @@ so the desktop app `Claude` is not a harness.
   `CLAUDE_CODE_SESSION_ID`, taken only when `CLAUDE_PID` names that same pid.
   A nested Claude sets both variables afresh. Any other value was inherited,
   so the session stays unknown (probes S3 Claude).
-- **Codex under the shared app-server daemon** (its `comm` path holds
-  `app-server-daemon`): this is a Codex TUI's tool call. The session is
+- **Codex under the shared app-server daemon**: this is a Codex TUI's tool
+  call. The daemon is a `codex` whose `comm` path holds `app-server-daemon`,
+  or whose parent is a `codex`, the TUI that started it. macOS `comm` is how
+  a process was exec'd, so the path alone is not guaranteed. A `codex exec`
+  always runs under a tool shell, never directly under a `codex`. The session is
   `CODEX_THREAD_ID`, which the 2026-10-29 ruling counts as KTD5's fallback.
   The pid is unknown, because the daemon is shared and proves no one
   session's liveness. Nesting is unknown too: the daemon's ancestors belong
@@ -55,9 +58,18 @@ token can't be told from one a nested child inherited.
 - **An inherited thread id.** A Claude started inside a Codex session
   inherits `CODEX_THREAD_ID`. Where `ps` is denied, that Claude reads as
   Codex.
-- **The daemon is recognised by its path.** The path comes from the U2
-  probe on macOS. Linux `ps -o comm=` prints a short name, so on Linux a
-  Codex TUI's tools would read as a `codex exec`.
+- **A daemon whose starting TUI has exited.** If launchd adopts the daemon
+  and its exec name holds no `app-server-daemon`, nothing marks it, and a
+  TUI's tools read as a `codex exec` with the shared pid. No live Codex
+  daemon was available to check how it is exec'd; the path comes from the
+  U2 probe.
+- **The walk guards against mislabelling, not attack.** On macOS a process
+  sets the name `ps` shows. A same-user process can exec itself as `codex`
+  and set `CODEX_THREAD_ID` to pose as a session. The hub plan's scope
+  assumes one user on one Mac, where sender names guard against mislabelling
+  only. Such a process could also write the store directly. `ps` is run as
+  `/bin/ps`, so emptying `PATH` can't push a caller onto the thread-id
+  fallback.
 - **pid reuse.** One snapshot can't hold a reused pid. Across time, a stored
   Claude pid that now belongs to another session is told apart by the
   session id the walk returns. U4b's binding compares the two.
@@ -83,6 +95,10 @@ Probed live against herdr 0.9.3:
 `mycelium.pane` exposes the title and the agent name side by side. Which one
 counts as the herdr name is U4b's launch-name rule. It accepts an
 `HERDR_PANE_ID` hint only when that pane's foreground holds the pid, and
-otherwise scans the panes. It reports `terminal_id` but never keys on it,
+otherwise scans the panes. The scan skips a pane herdr can't read. If no
+other pane holds the pid, it raises rather than answer "no pane" on a guess.
+Over 52 live panes a full scan took about 0.4 s. An empty title, name or
+session id reads as none. herdr is found through `PATH`, which the hook's
+harness supplies; launchd's `PATH` lacks Homebrew (lessons T9). It reports `terminal_id` but never keys on it,
 since herdr issues new ones at reboot (lessons C1). Typing into a pane is
 U12's.

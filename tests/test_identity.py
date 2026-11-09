@@ -292,7 +292,7 @@ def test_the_desktop_app_is_not_a_harness():
 def test_the_harness_names_are_the_ones_u4_knows():
     assert HARNESSES == ("claude", "codex")
     assert UNSUPPORTED == ("droid", "opencode")
-    assert PS_COMMAND == ("ps", "-axww", "-o", "pid=,ppid=,comm=")
+    assert PS_COMMAND == ("/bin/ps", "-axww", "-o", "pid=,ppid=,comm=")
 
 
 def test_resolve_takes_no_caller_name():
@@ -337,3 +337,24 @@ def test_process_table_parses_what_ps_prints():
     table = process_table(python("print('  700   1 claude')"))
 
     assert table == {700: Proc(700, 1, "claude")}
+
+
+# Review fixes (GRO-49).
+def test_ps_is_run_by_absolute_path_so_path_cannot_hide_or_replace_it():
+    # A caller that empties PATH must not push the walk onto the thread-id fallback.
+    assert PS_COMMAND[0] == "/bin/ps"
+
+
+def test_a_daemon_started_by_bare_name_is_known_by_its_codex_parent():
+    # macOS `comm` is how the process was exec'd, so the daemon's path is not
+    # guaranteed. A codex whose parent is a codex is the daemon its TUI started:
+    # a codex exec always runs under a tool shell.
+    table = chain("/bin/bash", "codex", "codex", "-zsh")
+    caller = walk(table, {"CODEX_THREAD_ID": CODEX_THREAD})
+
+    assert (caller.harness, caller.pid, caller.session_id, caller.nested) == (
+        "codex",
+        None,
+        CODEX_THREAD,
+        None,
+    )

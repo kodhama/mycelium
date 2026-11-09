@@ -1,4 +1,4 @@
-"""The one boundary to herdr, read-only (KTD19; GRO-49 plan, U4a, "Decisions").
+"""The one boundary to herdr, read-only (KTD19; docs/decisions/caller-identity.md).
 
 Every herdr call mycelium makes goes through this module, and here it only
 reads: find the pane a process runs in, read the pane's identity, and check
@@ -148,13 +148,22 @@ def find_pane(
     The hint (an `HERDR_PANE_ID` value) is tried first and accepted only when
     its foreground holds the pid: a child inherits its parent's value, so the
     value alone proves nothing (lessons C2). Otherwise every listed pane is
-    checked.
+    checked. A pane herdr can't read is skipped, and if no other pane holds the
+    pid, the scan raises PaneUnavailable rather than answer None on a guess.
     """
     if hint and foreground_is(hint, pid, command=command, timeout=timeout):
         return hint
+    unread: list[str] = []
     for pane_id in _pane_ids(command, timeout):
-        if pane_id != hint and foreground_is(pane_id, pid, command=command, timeout=timeout):
-            return pane_id
+        if pane_id == hint:
+            continue
+        try:
+            if foreground_is(pane_id, pid, command=command, timeout=timeout):
+                return pane_id
+        except PaneUnavailable:  # one pane herdr can't read must not hide the others
+            unread.append(pane_id)
+    if unread:
+        raise PaneUnavailable(f"no readable pane holds pid {pid}; unreadable: {', '.join(unread)}")
     return None
 
 
@@ -178,7 +187,8 @@ def _ask(
         done = subprocess.run(
             [*command, *args],
             capture_output=True,
-            text=True,
+            encoding="utf-8",  # herdr writes UTF-8 (titles carry glyphs), whatever the locale
+            errors="replace",
             timeout=timeout,
             check=False,
         )
@@ -186,8 +196,6 @@ def _ask(
         raise PaneUnavailable(f"herdr ({name}) is not installed") from None
     except subprocess.TimeoutExpired:
         raise PaneUnavailable(f"herdr did not answer within {timeout:g}s") from None
-    except UnicodeDecodeError as error:
-        raise _unexpected(error) from None
     except OSError as error:  # not executable, or not a program this system can run
         raise PaneUnavailable(f"herdr ({name}) can't be run: {error}") from None
     if done.returncode != 0:
@@ -251,7 +259,8 @@ def _text(value: Any, what: str) -> str:
 
 
 def _optional_text(value: Any, what: str) -> str | None:
-    if value is None:
+    """A string, or None when absent or empty: an empty name is no name."""
+    if value is None or value == "":
         return None
     if not isinstance(value, str):
         raise ValueError(f"{what} is not a string")
