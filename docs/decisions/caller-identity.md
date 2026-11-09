@@ -63,8 +63,9 @@ token can't be told from one a nested child inherited.
   macOS `comm` is how a process was exec'd. If Codex starts the daemon
   without its path, nothing marks it, and a TUI's tools read as a
   `codex exec` with the shared pid and `nested` true. No live Codex was run
-  to check this; the path comes from the U2 probe. Linux `comm` is always a
-  short name.
+  to check this; the path comes from the U2 probe. Plan U11 confirms it on
+  a live Codex and changes the rule if needed (lead ruling, GRO-49). Linux
+  `comm` is always a short name, so there the mark never matches.
 - **The walk guards against mislabelling, not attack.** On macOS a process
   sets the name `ps` shows. A same-user process can exec itself as `codex`
   and set `CODEX_THREAD_ID` to pose as a session. The hub plan's scope

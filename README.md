@@ -94,6 +94,8 @@ an argument.** It climbs from its own process to the nearest harness.
   Inside Codex's sandbox `ps` is denied, and a Codex TUI runs its tools under
   one shared daemon.
 - **A session started inside another one** is reported as nested.
+- **A Codex TUI is recognised by its shared daemon's path.** That Codex
+  starts the daemon by its path is not yet confirmed on a live Codex.
 - **Droid and opencode** callers resolve as unbound for now.
 
 herdr panes are read through one module, which only reads: a pane's identity,

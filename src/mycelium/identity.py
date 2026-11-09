@@ -32,8 +32,10 @@ as the caller. The rules come from hq `areas/agent-comms/research/probes-u2.md`
 `source` says what the answer rests on: `walk` whenever the walk ran,
 `codex-thread-id` when only the fallback identified the caller, and `none`
 when neither did. macOS `comm` is how a process was exec'd, so a daemon
-exec'd without its path reads as a codex exec; that is unverified on a live
-Codex (docs/decisions/caller-identity.md). The walk
+exec'd without its path reads as a codex exec, with the shared pid and nested
+true; that it is exec'd by path is unverified on a live Codex, and plan U11
+confirms it. Linux `comm` is a short name, so there the mark never matches
+(docs/decisions/caller-identity.md). The walk
 guards against mislabelling, not attack: a same-user process sets its own
 name (docs/decisions/caller-identity.md).
 """

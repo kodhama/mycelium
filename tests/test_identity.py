@@ -353,3 +353,12 @@ def test_a_codex_exec_a_tui_tool_shell_replaced_sits_under_the_daemon_and_is_nes
     caller = walk(table, {"CODEX_THREAD_ID": CODEX_THREAD})
 
     assert (caller.harness, caller.pid, caller.nested) == ("codex", 700, True)
+
+
+def test_a_daemon_execd_without_its_path_reads_as_a_codex_exec_documented_limit():
+    # Pins the decision record's known limit until plan U11 confirms the daemon's
+    # exec name on a live Codex: the walk then takes the shared pid, nested true.
+    table = chain("/bin/bash", "codex", "codex", "-zsh")
+    caller = walk(table, {"CODEX_THREAD_ID": CODEX_THREAD})
+
+    assert (caller.harness, caller.pid, caller.nested, caller.reason) == ("codex", 700, True, None)
