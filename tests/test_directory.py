@@ -165,6 +165,16 @@ def test_every_declared_held_and_bound_name_is_listed_once(world):
     assert names == sorted(["w-running", "w-parked", "w-done", "w-held", "scratch-probe"])
 
 
+def test_the_declared_names_are_read_once_per_directory(world, monkeypatch):
+    for pid, name in ((1001, "w-running"), (1002, "w-parked"), (1003, "scratch-probe")):
+        world.bind(claude(pid, f"s-{pid}"), launch=name)
+    calls = []
+    names = Index.names
+    monkeypatch.setattr(Index, "names", lambda self: calls.append(1) or names(self))
+    directory.rows(INDEX, world.store.rows(), world.context())
+    assert len(calls) == 1
+
+
 def test_a_row_reads_as_json_in_the_documented_shape(world):
     world.bind(claude(1001, "s-1"), launch="w-running")
     row = table(world)["w-running"]

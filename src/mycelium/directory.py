@@ -68,8 +68,12 @@ def rows(
     for binding in bound:
         if binding.name is not None:
             by_name.setdefault(binding.name, []).append(binding)
-    names = set(index.names()) | {hold.name for hold in index.holds()} | set(by_name)
-    return [_row(name, index, by_name.get(name, []), context, unhandled) for name in sorted(names)]
+    declared = index.names()
+    names = declared | {hold.name for hold in index.holds()} | set(by_name)
+    return [
+        _row(name, name in declared, index, by_name.get(name, []), context, unhandled)
+        for name in sorted(names)
+    ]
 
 
 @contextmanager
@@ -97,11 +101,15 @@ def unhandled_in(store_path: Path) -> Iterator[Unhandled]:
 
 
 def _row(
-    name: str, index: Index, bound: list[Binding], context: Context, unhandled: Unhandled
+    name: str,
+    declared: bool,
+    index: Index,
+    bound: list[Binding],
+    context: Context,
+    unhandled: Unhandled,
 ) -> Row:
     live = next((b for b in bound if b.state == "current" and liveness(b, context) != "dead"), None)
     shown = live or _latest(b for b in bound if b.state == "current") or _latest(bound)
-    declared = name in index.names()
     deliverability = _deliverability(name, declared, index, live, bound, context, unhandled)
     can = deliverability == "live"
     return Row(
