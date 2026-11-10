@@ -4,8 +4,8 @@
 and reports, and gets its mail.
 
 **Status: early.** This release holds the command line's skeleton, the folder
-resolver, the message store and the org index. Mailboxes, the directory and
-the harness hooks come in later releases.
+resolver, the message store, the org index, the bindings and the directory.
+Mailboxes and the harness hooks come in later releases.
 
 ## Run it
 
@@ -49,7 +49,8 @@ When an `XDG_*` variable is unset, empty or relative, mycelium uses
   target, so on macOS a folder under `/var` and the same one under
   `/private/var` are one path.
 - **Its files are owner-only.** Folders mycelium creates are `0700`. The
-  store and its `-wal` and `-shm` files are `0600`, and any of them with a
+  store, the bindings (`bindings.sqlite3` in state) and their `-wal` and
+  `-shm` files are `0600`, and any of them with a
   looser mode is tightened when the store is opened. A folder that already
   exists keeps its mode and owner: mycelium neither tightens nor checks it.
 - **It refuses a symlink it finds when the store opens.** The store's path
@@ -107,6 +108,46 @@ herdr panes are read through one module, which only reads: a pane's identity,
 its foreground processes, and the pane that holds a given process. It was
 built against herdr 0.9.3. The rules and their limits are in
 [the decision](docs/decisions/caller-identity.md).
+
+## Bindings and the directory
+
+**Each session is bound to the role it was launched as, or told plainly that
+it isn't.** The harness hooks bind it at every SessionStart; they arrive in a
+later release. The rules are in [the decision](docs/decisions/bindings.md).
+
+- **The launch name** comes from the harness's session name, `KODHAMA_AGENT`
+  and herdr's name for the session's own pane. Every source present must
+  agree; if none names it, or they disagree, the session is unbound. The pane
+  title never counts, and `@maintainer` is never bound.
+- **The newest session for a name is current**, and the one it replaces is
+  superseded and told once. Under grove's lease only the lease nonce makes a
+  session current: `mycelium adopt <nonce>`. A fork, or a session started
+  inside another one, stays unbound unless it adopts the nonce.
+- **After a reboot every binding is dead**, so the role reads as absent until
+  its session binds again.
+- **A name declared in no cluster still binds**, as undeclared.
+
+**`mycelium whoami` says who is calling.** Line 1 is the name exactly, and
+line 2 is `generation <n>`; `--json` prints the full record instead. Readers
+compare line 1 only, stripping one trailing newline: the cluster helper
+compares it with `KODHAMA_AGENT`.
+
+| exit | meaning |
+| --- | --- |
+| 0 | the caller is current |
+| 1 | refused: provisional, superseded or unbound; the reason is on stderr and stdout is empty |
+| 2 | a usage error: an unknown command or bad arguments |
+| 3 | mycelium could not tell: the bindings store, state folder, index or cluster helper can't be read, or the boot id is unknown |
+
+Right after an in-place `/clear`, `whoami` exits 1 until the clear's
+SessionStart hook has bound the new session id, then 0 with the next
+generation.
+
+**`mycelium directory` prints who is reachable**, as JSON:
+`{"names": [{"name", "declared", "deliverability", "harness", "generation",
+"last_seen", "knock": {"can", "how"}}]}`. Deliverability is `live`, `absent`,
+`queue-only`, `held` or `gone`, computed from the clusters and the bindings
+each time. A name can be knocked only while live.
 
 ## What the store survives
 
