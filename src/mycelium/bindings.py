@@ -23,7 +23,7 @@ Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
 
 import sqlite3
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -41,6 +41,8 @@ SOURCES = ("startup", "resume", "compact", "clear", "fork")
 
 LAUNCH_NAMES_NOW_DISAGREE = "launch names now disagree"
 NO_BINDING_YET = "no binding for this session yet: its SessionStart hook has not bound it"
+_HOLDING = ("current", "provisional")
+"""The states that hold a name: a new current binding supersedes them."""
 
 _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS bindings (
@@ -200,8 +202,7 @@ def reconfirm(binding: Binding, launch: Launch) -> tuple[str, str | None]:
 
     A later SessionStart of the same session whose launch names now name someone
     else unbinds it (R3). A rename between SessionStarts goes unseen until then."""
-    live_states = ("current", "provisional")
-    if binding.name is not None and binding.state in live_states:
+    if binding.name is not None and binding.state in _HOLDING:
         if launch.disagrees_with(binding.name):
             return "unbound", LAUNCH_NAMES_NOW_DISAGREE
     return binding.state, binding.reason
@@ -316,8 +317,9 @@ class Bindings:
         if claim.state == "live" and not self._holds_session(claim, row):
             raise Refused("another session holds the live lease")
         if row.state == "current" and row.nonce == nonce:
-            self._put(replace(row, last_seen=context.now))
-            return Bound(replace(row, last_seen=context.now))
+            seen = replace(row, last_seen=context.now)
+            self._put(seen)
+            return Bound(seen)
         found = replace(
             row,
             state="current",
@@ -326,7 +328,7 @@ class Bindings:
             generation=self._next_generation(row.name),
             last_seen=context.now,
         )
-        return self._make_current(found, context)
+        return self._make_current(found)
 
     def resolve_caller(self, caller: Caller, context: Context) -> Resolution:
         """The caller's binding (KTD5): Claude by pid and session id, Codex by thread id."""
@@ -381,9 +383,9 @@ class Bindings:
         else:
             found = self._for_name(found, row, own, caller, context)
         if found.state == "current":
-            return self._make_current(found, context, also=own)
+            return self._make_current(found, also=own)
         self._put(found)
-        return Bound(found, self._supersede(own, found, context))
+        return Bound(found, self._supersede(own, found))
 
     def _for_name(
         self,
@@ -393,11 +395,7 @@ class Bindings:
         caller: Caller,
         context: Context,
     ) -> Binding:
-        others = [
-            other
-            for other in self._named(found.name)
-            if other.key != found.key and other.state in ("current", "provisional")
-        ]
+        others = self._rivals(found)
         claim = context.claim(found.name)
 
         def runs(claimed: lease.Claim) -> bool:
@@ -432,16 +430,20 @@ class Bindings:
         generation = row.generation if keeps else self._next_generation(found.name)
         return replace(found, state="current", reason=None, generation=generation)
 
-    def _make_current(self, found: Binding, context: Context, also: list[Binding] = ()) -> Bound:
-        rivals = [
+    def _make_current(self, found: Binding, also: Sequence[Binding] = ()) -> Bound:
+        rivals = self._rivals(found)
+        self._put(found)
+        return Bound(found, self._supersede([*rivals, *also], found))
+
+    def _rivals(self, found: Binding) -> list[Binding]:
+        """The name's other bindings that hold it: current or provisional."""
+        return [
             other
             for other in self._named(found.name)
-            if other.key != found.key and other.state in ("current", "provisional")
+            if other.key != found.key and other.state in _HOLDING
         ]
-        self._put(found)
-        return Bound(found, self._supersede([*rivals, *also], found, context))
 
-    def _supersede(self, rows: list[Binding], by: Binding, context: Context) -> tuple[Binding, ...]:
+    def _supersede(self, rows: Sequence[Binding], by: Binding) -> tuple[Binding, ...]:
         done: dict[tuple[str, str], Binding] = {}
         for row in rows:
             if row.key == by.key or row.key in done or row.state == "superseded":
@@ -477,14 +479,11 @@ class Bindings:
         )
 
     def _own(self, caller: Caller, context: Context) -> Binding:
-        row = self._get(caller.harness, caller.session_id)
-        if row is None:
-            raise Refused(NO_BINDING_YET)
-        if caller.harness == "claude" and row.pid != caller.pid:
-            raise Refused(f"the binding is another process's (pid {row.pid}, not {caller.pid})")
-        if row.boot != context.boot:
-            raise Refused("the binding is from an earlier boot")
-        return row
+        """The caller's binding in any state, as `resolve_caller` finds it. Raises Refused."""
+        found = self.resolve_caller(caller, context)
+        if found.binding is None:
+            raise Refused(found.reason)
+        return found.binding
 
     def _get(self, harness: str, session_id: str) -> Binding | None:
         found = self._db.execute(
