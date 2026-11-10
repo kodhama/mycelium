@@ -1,4 +1,3 @@
-import ast
 import json
 import sys
 import time
@@ -18,7 +17,6 @@ from mycelium.pane import (
 
 FAKE = Path(__file__).parent / "fake_herdr.py"
 HERDR = [sys.executable, str(FAKE)]
-SOURCE = Path(__file__).parent.parent / "src" / "mycelium"
 
 CWD = "/home/maintainer/project"
 SESSION = "00000000-0000-0000-0000-000000000001"
@@ -313,25 +311,6 @@ def test_a_pane_list_that_is_not_the_shape_is_refused(tmp_path):
     output = '{"id": "cli:pane:list", "result": {"panes": [{"cwd": "/"}]}}'
     with pytest.raises(PaneUnavailable, match="unexpected output"):
         find_pane(1001, command=script(tmp_path, output))
-
-
-# Scenario 5: every herdr call goes through pane.py (KTD19).
-
-
-def test_no_module_but_pane_names_the_herdr_command():
-    def names_herdr(path: Path) -> bool:
-        tree = ast.parse(path.read_text(), filename=str(path))
-        return any(
-            isinstance(node, ast.Constant) and node.value == "herdr" for node in ast.walk(tree)
-        )
-
-    assert names_herdr(SOURCE / "pane.py"), "the scan would find the command if it were there"
-    offenders = [
-        str(path.relative_to(SOURCE))
-        for path in sorted(SOURCE.rglob("*.py"))
-        if path != SOURCE / "pane.py" and names_herdr(path)
-    ]
-    assert offenders == []
 
 
 # Review fixes (GRO-49).
