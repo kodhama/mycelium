@@ -15,7 +15,10 @@ Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
   decided again instead.
 - **Generations, per name**, rise when a binding becomes current by a fresh
   start, a `/clear` or a `/resume` onto another session in the same process,
-  or an adoption. A resume or compaction of the same session keeps its own.
+  or an adoption. A resume or compaction of the same session keeps its own, and
+  so does a session decided again under the same name that nobody else has held
+  since; one that another session has held since stays out until it adopts
+  (lead ruling, GRO-50 lead note, 2026-11-10).
 - **States:** `current`; `provisional` (a lease exists, its nonce not yet
   adopted); `superseded`; `unbound`, with the reason.
 - **Supersede:** a binding that becomes current supersedes the name's other
@@ -47,6 +50,7 @@ SOURCES = ("startup", "resume", "compact", "clear", "fork")
 LAUNCH_NAMES_NOW_DISAGREE = "launch names now disagree"
 FORK = "a fork binds unbound unless it adopts the lease nonce"
 NESTED = "nested: another harness runs above this one; adopt the lease nonce to bind"
+HELD_SINCE = "another session held {name} since; adopt the lease or start fresh to take it back"
 _STAYS_UNBOUND = (FORK, NESTED)
 """The unbound reasons a SessionStart re-confirms; every other unbound session is decided again."""
 _CONTINUES = ("resume", "compact")
@@ -70,6 +74,7 @@ _SCHEMA = (
         nonce TEXT,
         bound_at REAL NOT NULL,
         last_seen REAL NOT NULL,
+        seen_generation INTEGER,
         PRIMARY KEY (harness, session_id)
     )""",
     "CREATE INDEX IF NOT EXISTS bindings_by_name ON bindings (name)",
@@ -80,7 +85,7 @@ _SCHEMA = (
 )
 _FIELDS = (
     "harness, session_id, name, declared, pid, evidence, boot, generation,"
-    " state, reason, nonce, bound_at, last_seen"
+    " state, reason, nonce, bound_at, last_seen, seen_generation"
 )
 
 
@@ -113,6 +118,10 @@ class Binding:
     """The lease nonce it adopted, or inherited in its own process."""
     bound_at: float
     last_seen: float
+    seen_generation: int | None = None
+    """The name's generation when the binding last held it (its own generation) or
+    went provisional for it; None if neither. Nobody else has held the name since
+    while the name's generation still equals it (lead ruling, GRO-50)."""
 
     @property
     def key(self) -> tuple[str, str]:
@@ -327,12 +336,14 @@ class Bindings:
             seen = replace(row, last_seen=context.now)
             self._put(seen)
             return Bound(seen)
+        generation = self._next_generation(row.name)
         found = replace(
             row,
             state="current",
             reason=None,
             nonce=nonce,
-            generation=self._next_generation(row.name),
+            generation=generation,
+            seen_generation=generation,
             last_seen=context.now,
         )
         return self._make_current(found)
@@ -431,21 +442,26 @@ class Bindings:
     def _decide(self, row: Binding | None, event: Event, context: Context) -> Bound:
         caller, name = event.caller, event.launch.name
         own = self._same_process(caller, context)
+        # A generation belongs to its name: a row decided under another name drops it.
+        # With no launch name, the row keeps its own name, so a session that re-runs
+        # its hook while its names disagree neither loses its generation nor forgets
+        # who has held the name since (lead ruling, GRO-50).
+        same = row is not None and row.name is not None and name in (None, row.name)
         found = Binding(
             harness=caller.harness,
             session_id=caller.session_id,
-            name=name,
-            declared=bool(name) and context.declared(name),
+            name=row.name if same else name,
+            declared=row.declared if same else bool(name) and context.declared(name),
             pid=caller.pid,
             evidence=caller.source,
             boot=context.boot,
-            # A generation belongs to its name: a row decided under another name drops it.
-            generation=row.generation if row is not None and row.name == name else None,
+            generation=row.generation if same else None,
             state="unbound",
             reason=None,
             nonce=None,
             bound_at=context.now if row is None else row.bound_at,
             last_seen=context.now,
+            seen_generation=row.seen_generation if same else None,
         )
         if name is None:
             found = replace(found, reason=event.launch.reason)
@@ -468,6 +484,9 @@ class Bindings:
         caller: Caller,
         context: Context,
     ) -> Binding:
+        counter = self._generation(found.name)
+        if self._held_since(row, found, counter):
+            return replace(found, reason=HELD_SINCE.format(name=found.name))
         others = self._rivals(found)
         claim = context.claim(found.name)
 
@@ -482,7 +501,7 @@ class Bindings:
             heir = next((o for o in own if o.nonce == claim.nonce and o.name == found.name), None)
             if heir is None:
                 reason = f"a lease holds {found.name}: adopt its nonce to become current"
-                return replace(found, state="provisional", reason=reason)
+                return replace(found, state="provisional", reason=reason, seen_generation=counter)
             # A /clear or /resume in the process that holds the lease keeps the lease.
             found = replace(found, nonce=claim.nonce)
         else:
@@ -494,14 +513,27 @@ class Bindings:
                         " and this caller's nesting is unknown"
                     )
                     return replace(found, reason=reason)
-        keeps = (
-            row is not None
-            and row.state == "current"
-            and row.name == found.name
-            and row.generation == self._generation(found.name)
+        # The same session under the same name keeps its generation while nobody has
+        # taken a newer one (KTD4; lead ruling, GRO-50); otherwise it takes the next.
+        keeps = found.generation is not None and found.generation == counter
+        generation = found.generation if keeps else self._next_generation(found.name)
+        return replace(
+            found, state="current", reason=None, generation=generation, seen_generation=generation
         )
-        generation = row.generation if keeps else self._next_generation(found.name)
-        return replace(found, state="current", reason=None, generation=generation)
+
+    @staticmethod
+    def _held_since(row: Binding | None, found: Binding, counter: int) -> bool:
+        """Whether another binding became current for the name after this unbound or
+        provisional session last held it or went provisional for it (lead ruling,
+        GRO-50; KTD4). Such a session stays out until it adopts the lease or starts
+        fresh: re-running its hook can't take the role back."""
+        return (
+            row is not None
+            and row.state in ("unbound", "provisional")
+            and row.name == found.name
+            and found.seen_generation is not None
+            and found.seen_generation != counter
+        )
 
     def _make_current(self, found: Binding, also: Sequence[Binding] = ()) -> Bound:
         rivals = self._rivals(found)
@@ -573,13 +605,14 @@ class Bindings:
 
     def _put(self, row: Binding) -> None:
         self._db.execute(
-            f"INSERT INTO bindings ({_FIELDS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            f"INSERT INTO bindings ({_FIELDS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (harness, session_id) DO UPDATE SET"
             " name = excluded.name, declared = excluded.declared, pid = excluded.pid,"
             " evidence = excluded.evidence, boot = excluded.boot,"
             " generation = excluded.generation, state = excluded.state,"
             " reason = excluded.reason, nonce = excluded.nonce,"
-            " bound_at = excluded.bound_at, last_seen = excluded.last_seen",
+            " bound_at = excluded.bound_at, last_seen = excluded.last_seen,"
+            " seen_generation = excluded.seen_generation",
             (
                 row.harness,
                 row.session_id,
@@ -594,6 +627,7 @@ class Bindings:
                 row.nonce,
                 row.bound_at,
                 row.last_seen,
+                row.seen_generation,
             ),
         )
 

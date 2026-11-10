@@ -524,6 +524,87 @@ def test_a_session_decided_under_another_name_does_not_carry_the_old_names_gener
     assert renamed.binding.generation is None
 
 
+# The lead's ruling on a re-decided session (GRO-50 lead note, 2026-11-10; KTD4).
+
+RENAMED = Launch(None, "launch names disagree", {"pane": "ogham-lead"}, "named")
+
+
+@pytest.mark.parametrize("disagreeing", [1, 2])
+def test_a_g2_unbound_session_whose_names_agree_again_keeps_its_generation(world, disagreeing):
+    world.bind(B)  # generation 1
+    first = world.bind(A)  # generation 2
+    for _ in range(disagreeing):  # G2, then the hook re-run while the names still disagree
+        assert world.bind(A, launch=RENAMED, source="resume").binding.state == "unbound"
+    again = world.bind(A, source="resume")
+    assert (again.binding.state, again.binding.generation) == ("current", first.binding.generation)
+    assert again.superseded == ()
+
+
+def test_an_expired_provisional_session_nobody_adopted_takes_the_names_next_generation(world):
+    world.bind(B)  # generation 1
+    world.alive.discard(2002)
+    world.claim(nonce="n1")
+    first = world.bind(A)
+    assert (first.binding.state, first.binding.generation) == ("provisional", None)
+    world.claim(nonce="n1", expires="2020-01-01T00:00:00.000Z")
+    later = world.bind(A, source="resume")
+    assert (later.binding.state, later.binding.generation) == ("current", 2)
+    assert [old.session_id for old in later.superseded] == ["s-b"]
+
+
+def test_a_g2_unbound_session_whose_name_another_held_since_stays_out_until_it_adopts(world):
+    world.bind(A)  # generation 1
+    world.bind(A, launch=RENAMED, source="resume")
+    world.bind(B)  # generation 2; A is unbound, so nothing of A's is superseded
+    again = world.bind(A, source="resume")
+    assert again.binding.state == "unbound"
+    assert "another session held ogham-worker since" in again.binding.reason
+    assert again.superseded == ()
+    assert world.resolve(B).state == "current"
+    world.alive.discard(2002)  # the holder dies: re-running the hook still takes nothing back
+    still = world.bind(A, source="resume")
+    assert (still.binding.state, still.superseded) == ("unbound", ())
+    world.claim(nonce="n1")
+    adopted = world.adopt(A, "n1")
+    assert (adopted.binding.state, adopted.binding.generation) == ("current", 3)
+    assert [old.session_id for old in adopted.superseded] == ["s-b"]
+
+
+@pytest.mark.parametrize("ended", ["holder died", "lease expired"])
+@pytest.mark.parametrize("mismatched", [False, True])
+def test_a_provisional_session_whose_lease_another_adopted_stays_out(world, ended, mismatched):
+    world.claim(nonce="n1")
+    assert world.bind(A).binding.state == "provisional"
+    if mismatched:  # a wrong nonce unbinds it before the lease is adopted
+        with pytest.raises(Refused, match="nonce does not match"):
+            world.adopt(A, "n9")
+    world.bind(B)
+    assert world.adopt(B, "n1").binding.generation == 1
+    if ended == "holder died":
+        world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-b")
+        world.alive.discard(2002)
+    else:
+        world.claim(nonce="n2", expires="2020-01-01T00:00:00.000Z")
+    later = world.bind(A, source="resume")
+    assert later.binding.state in ("superseded", "unbound")
+    assert later.binding.generation is None
+    assert later.superseded == ()
+    if later.binding.state == "unbound":
+        assert "another session held ogham-worker since" in later.binding.reason
+    assert world.resolve(B).state == "current"
+
+
+def test_a_session_whose_herdr_name_changed_binds_at_the_new_names_next_generation(world):
+    world.bind(B, launch="ogham-lead")  # ogham-lead generation 1
+    world.bind(claude(3003, "s-c"), launch="ogham-lead")  # ogham-lead generation 2
+    world.bind(A)  # ogham-worker generation 1
+    world.bind(A, launch=RENAMED, source="resume")
+    moved = world.bind(A, launch="ogham-lead", source="resume")
+    found = moved.binding
+    assert (found.name, found.state, found.generation) == ("ogham-lead", "current", 3)
+    assert [old.session_id for old in moved.superseded] == ["s-c"]
+
+
 # touch: a session's prompt refreshes last_seen (lead ruling, GRO-50; U8's hook calls it).
 
 
