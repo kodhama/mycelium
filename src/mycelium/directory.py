@@ -19,13 +19,12 @@ the SendMessage hint, Codex through its queue (KTD9).
 
 import os
 import sqlite3
-import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mycelium.bindings import Binding, Context, liveness
+from mycelium.bindings import Binding, Context, iso, liveness
 from mycelium.index import Index
 
 DELIVERABILITY = ("live", "absent", "queue-only", "held", "gone")
@@ -109,7 +108,7 @@ def _row(
         deliverability=deliverability,
         harness=shown.harness if shown else None,
         generation=shown.generation if shown else None,
-        last_seen=_iso(max(b.last_seen for b in bound)) if bound else None,
+        last_seen=iso(max(b.last_seen for b in bound)) if bound else None,
         knock={"can": can, "how": KNOCK.get(shown.harness) if can and shown else None},
     )
 
@@ -144,7 +143,3 @@ def _deliverability(
 
 def _latest(bound: Iterable[Binding]) -> Binding | None:
     return max(bound, key=lambda b: b.last_seen, default=None)
-
-
-def _iso(seconds: float) -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))

@@ -118,8 +118,8 @@ class Binding:
             "evidence": self.evidence,
             "boot": self.boot,
             "nonce": self.nonce,
-            "bound_at": _iso(self.bound_at),
-            "last_seen": _iso(self.last_seen),
+            "bound_at": iso(self.bound_at),
+            "last_seen": iso(self.last_seen),
         }
 
 
@@ -547,5 +547,6 @@ def _binding(row: sqlite3.Row | tuple) -> Binding:
     return Binding(*values)
 
 
-def _iso(seconds: float) -> str:
+def iso(seconds: float) -> str:
+    """UTC, to the second, as the JSON records give times."""
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(seconds))
