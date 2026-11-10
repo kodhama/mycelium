@@ -50,6 +50,11 @@ def test_the_store_lives_in_data(home):
     assert paths.store == home / "d/kodhama/mycelium/store.sqlite3"
 
 
+def test_the_bindings_live_in_state(home):
+    paths = resolve({"XDG_STATE_HOME": str(home / "s")}, home=home)
+    assert paths.bindings == home / "s/kodhama/mycelium/bindings.sqlite3"
+
+
 def test_a_symlinked_xdg_folder_resolves_to_its_target(home):
     # On macOS /var is a symlink to /private/var: an unresolved path would
     # compare unequal to the same folder reached the other way.
