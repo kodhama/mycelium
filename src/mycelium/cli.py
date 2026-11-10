@@ -16,6 +16,8 @@ import os
 import sqlite3
 import sys
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import fields
 
 from mycelium import bindings, boot, clusters, identity, lease, paths
@@ -146,24 +148,22 @@ def _resolution(caller: identity.Caller) -> bindings.Resolution:
         return store.resolve_caller(caller, _context())
 
 
-class _opened:
+@contextmanager
+def _opened(resolved: paths.Paths) -> Iterator[bindings.Bindings]:
     """The bindings store, opened as a context; any failure to open is exit 3."""
-
-    def __init__(self, resolved: paths.Paths) -> None:
-        self._path = resolved.bindings
-
-    def __enter__(self) -> bindings.Bindings:
-        try:
-            self._store = bindings.open_bindings(self._path)
-        except (StoreRefused, sqlite3.Error, OSError) as error:
-            raise _Unavailable(f"the bindings store can't be read: {error}") from None
-        return self._store
-
-    def __exit__(self, *exc: object) -> None:
-        self._store.close()
+    try:
+        store = bindings.open_bindings(resolved.bindings)
+    except (StoreRefused, sqlite3.Error, OSError) as error:
+        raise _Unavailable(f"the bindings store can't be read: {error}") from None
+    try:
+        yield store
+    finally:
+        store.close()
 
 
-def _context(claims=None, boot_required: bool = True) -> bindings.Context:
+def _context(
+    claims: Callable[[str], lease.Claim] | None = None, boot_required: bool = True
+) -> bindings.Context:
     found = boot.boot_id()
     if found is None and boot_required:
         raise _Unavailable("the boot id can't be read")
