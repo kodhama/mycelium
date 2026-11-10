@@ -353,6 +353,21 @@ class Bindings:
             return Resolution("unbound", None, "the binding is from an earlier boot")
         return Resolution(row.state, row, row.reason)
 
+    def touch(self, caller: Caller, context: Context) -> Resolution:
+        """Refresh the caller's own binding's `last_seen`, and nothing else.
+
+        U8's UserPromptSubmit hook calls it, so a session that runs for days
+        without a SessionStart stays seen (R37). The binding is found as
+        `resolve_caller` finds it; for a caller with none from this boot, it
+        changes nothing and returns that unbound resolution."""
+        with files.write(self._db):
+            found = self.resolve_caller(caller, context)
+            if found.binding is None:
+                return found
+            seen = replace(found.binding, last_seen=context.now)
+            self._put(seen)
+        return Resolution(found.state, seen, found.reason)
+
     def authorize(self, caller: Caller, context: Context) -> Binding:
         """The caller's current binding. Raises Refused for any other caller (R4)."""
         found = self.resolve_caller(caller, context)

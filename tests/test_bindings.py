@@ -524,6 +524,33 @@ def test_a_session_decided_under_another_name_does_not_carry_the_old_names_gener
     assert renamed.binding.generation is None
 
 
+# touch: a session's prompt refreshes last_seen (lead ruling, GRO-50; U8's hook calls it).
+
+
+def test_touch_refreshes_last_seen_and_changes_nothing_else(world):
+    first = world.bind(A).binding
+    world.now += 100
+    touched = world.store.touch(A, world.context())
+    assert touched.state == "current"
+    (row,) = world.store.rows()
+    assert row == replace(first, last_seen=world.now)
+    assert touched.binding == row
+
+
+def test_touch_without_a_binding_of_this_boot_does_nothing_and_says_so(world):
+    found = world.store.touch(A, world.context())
+    assert (found.state, found.binding, found.reason) == ("unbound", None, bindings.NO_BINDING_YET)
+    assert world.store.rows() == []
+    world.bind(A)
+    (before,) = world.store.rows()
+    world.boot = "boot-after"
+    world.now += 100
+    found = world.store.touch(A, world.context())
+    assert (found.state, found.binding) == ("unbound", None)
+    assert "earlier boot" in found.reason
+    assert world.store.rows() == [before]
+
+
 # The nested=None rule (lead ruling, GRO-50).
 
 

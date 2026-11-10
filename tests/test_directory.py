@@ -137,6 +137,16 @@ def test_an_undeclared_name_is_gone_after_seven_days_unbound_with_nothing_unhand
     assert table(world)["scratch-probe"].deliverability == "gone"
 
 
+def test_an_undeclared_name_touched_within_seven_days_is_not_gone(world):
+    probe = claude(1001, "s-1")
+    world.bind(probe, launch="scratch-probe")
+    world.now += 6 * DAY
+    world.store.touch(probe, world.context())  # a prompt, six days in
+    world.alive.clear()
+    world.now += 2 * DAY
+    assert table(world)["scratch-probe"].deliverability == "queue-only"
+
+
 def test_an_undeclared_name_with_unhandled_mail_is_kept(world):
     world.bind(claude(1001, "s-1"), launch="scratch-probe")
     world.alive.clear()
