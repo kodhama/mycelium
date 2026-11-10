@@ -44,14 +44,20 @@ records the name, `declared`, the pid, the evidence the identity rested on
 reason, the adopted nonce, and the bound and last-seen times. A second table
 keeps each name's last generation, so generations never repeat.
 
-**Which name the claim is filed under: an inference, not confirmed.**
-`lease.mjs` takes `name` from its caller and does not say whether it is the
-declared or the effective name. The cluster spec (§1) puts
-`grove/local/<name>/claim` beside `grove/agents/<name>/` in the checkout's
-own `.kodhama/`, where names are as the cluster file declares them. So
-mycelium reads `<slice.home>/.kodhama/grove/local/<declared_name>/claim`
-(`bindings.claim_reader`). If grove files it under the effective name, only
-that one function changes.
+**Where the claim is filed: a grove ruling.** `lease.mjs` takes `home` and
+`name` from its caller. grove's owner ruled on GRO-50 (relayed by the
+lead, 2026-11-10):
+
+- `home` is the cluster's home, the folder holding `.kodhama/`. It is never
+  `$HOME`.
+- `name` is the name `cluster.toml` declares. An effective name maps back to
+  it through the suffix in `org/local/instance.toml`.
+
+The cluster spec (§1) agrees: `grove/local/<name>/claim` sits beside
+`grove/agents/<name>/` in the checkout's own `.kodhama/`. So mycelium reads
+`<slice.home>/.kodhama/grove/local/<declared_name>/claim`
+(`bindings.claim_reader`). The index's slice already carries the declared
+name, and a test pins the suffixed case.
 
 ## 2026-11-10 decision: the launch name
 
