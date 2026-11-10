@@ -10,6 +10,7 @@ import pytest
 from mycelium import bindings, identity, lease
 from mycelium.bindings import Context, Event, Refused
 from mycelium.identity import Caller, Proc
+from mycelium.index import refresh
 from mycelium.launch import Launch
 from mycelium.store import StoreRefused
 
@@ -541,3 +542,21 @@ def test_a_bindings_file_from_a_newer_mycelium_is_refused(tmp_path):
         raw.execute(f"PRAGMA user_version={bindings.SCHEMA_VERSION + 1}")
     with pytest.raises(StoreRefused, match="newer"):
         bindings.open_bindings(path)
+
+
+def test_a_suffixed_checkout_reads_its_claim_under_the_declared_name_at_its_home(tree):
+    # Grove ruling (GRO-50): the claim sits at the cluster's home, under the name
+    # cluster.toml declares; the effective name's suffix comes from instance.toml.
+    found = tree("org")
+    index = refresh(found.paths, read=found.read).index
+    home = found.home("hq/mq/repos/engine")
+    assert index.slice("ex-engine-lead-427").declared_name == "ex-engine-lead"
+    declared = lease.claim_path(home, "ex-engine-lead")
+    declared.parent.mkdir(parents=True)
+    claim = {"state": "live", "nonce": "n-declared", "resumer": "lead", "boot": BOOT}
+    declared.write_text(json.dumps(claim))
+    effective = lease.claim_path(home, "ex-engine-lead-427")
+    effective.parent.mkdir(parents=True)
+    effective.write_text(json.dumps({**claim, "nonce": "n-effective"}))
+
+    assert bindings.claim_reader(index)("ex-engine-lead-427").nonce == "n-declared"
