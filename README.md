@@ -134,6 +134,14 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
 - **A resume or compaction keeps the session's binding**, even in a new
   process, as when herdr restores a pane: a current session stays current
   with its generation and lease, and a superseded one stays superseded.
+- **A session unbound or provisional is decided again at its next
+  SessionStart** (the lead's ruling on GRO-50, after KTD4). Under the same
+  name, it keeps its generation if nobody else has held the name since, and
+  a provisional one that never held it takes the name's next. If another
+  session has held the name since, it stays unbound: re-running its hook
+  can't take the role back, and only `mycelium adopt <nonce>` or a fresh
+  session can. Under a new herdr name it binds fresh, at that name's next
+  generation.
 - **After a reboot every binding is dead**, so the role reads as absent until
   its session binds again.
 - **A name declared in no cluster still binds**, as undeclared.

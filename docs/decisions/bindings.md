@@ -42,8 +42,10 @@ folders and files, a symlink refused, a newer schema refused before any
 write, and WAL with `synchronous=NORMAL`. One row per (harness, session id)
 records the name, `declared`, the pid, the evidence the identity rested on
 (`walk` or `codex-thread-id`), the boot id, the generation, the state and its
-reason, the adopted nonce, and the bound and last-seen times. A second table
-keeps each name's last generation, so generations never repeat.
+reason, the adopted nonce, the bound and last-seen times, and
+`seen_generation`: the name's generation when the row last held the name or
+went provisional for it (below). A second table keeps each name's last
+generation, so generations never repeat.
 
 **Where the claim is filed.** `lease.mjs` takes `home` and `name` from its
 caller. The kodhama hub's cluster spec (`specs/suite/clusters.md` at
@@ -95,8 +97,9 @@ name, and a test pins the suffixed case.
     decided again at each SessionStart. herdr's record may not exist yet at
     the first one (lessons C2);
   - a provisional session. Provisional means a lease exists (KTD6); once it
-    has ended, the hook binding follows newest-wins. While the lease holds,
-    it stays provisional and supersedes nothing;
+    has ended, the hook binding follows newest-wins, unless another session
+    has held the name since (the lead's ruling, below). While the lease
+    holds, it stays provisional and supersedes nothing;
   - a superseded session whose name a session of the caller's own process
     (same pid and boot) now holds: a `/resume` back within one process
     (lessons G3). It becomes current with a new generation, and the session
@@ -112,7 +115,9 @@ name, and a test pins the suffixed case.
   next generation after a fresh start, a `/clear`, or a `/resume` onto
   another session in the same pid (lead ruling, G3). Adoption also takes the
   next one. A resume or compaction of the same session keeps its own, even in
-  a new process, as when herdr restores a pane with `claude --resume`.
+  a new process, as when herdr restores a pane with `claude --resume`. A
+  session decided again follows the lead's ruling on a re-decided session
+  (below).
 - **States:** `current`, `provisional`, `superseded`, and `unbound` with a
   reason: no launch name, names disagree, nested, fork, nonce mismatch,
   `@maintainer`, or a walk-verified holder (below).
@@ -138,11 +143,12 @@ name, and a test pins the suffixed case.
     this session or another session of its process. It refuses a wrong nonce,
     which unbinds a provisional caller ("nonce mismatch"), an earlier-boot
     claim, an expired one, and a live one another session holds.
-  - A session decided again **keeps its generation only if it is still
-    current under the same name** and nobody has taken a newer one. One that
-    turns current from unbound or provisional takes the name's next
-    generation. A generation belongs to its name: a session decided under
-    another name never carries the old one.
+  - A session decided again **keeps its generation while it is under the
+    same name and nobody has taken a newer one**, in any state (the lead's
+    ruling, below). A generation belongs to its name: a session decided under
+    another name never carries the old one. A SessionStart that gives no
+    launch name leaves the row's own name, generation and `seen_generation`
+    in place, so re-running the hook while the names disagree loses neither.
 - **Forks and nested sessions** bind unbound unless they adopt the nonce
   (KTD4).
 
@@ -164,9 +170,43 @@ launch source now names someone other than the binding's name, the binding
 becomes unbound, with the reason "launch names now disagree" (R3). The role
 turns absent, and R13 alerts. A `/clear` is not a re-confirm: it starts a
 new session id, which is decided. The next SessionStart decides a G2-unbound
-session again, so it binds once its names agree. **Known limit: a rename
+session again, so it binds once its names agree, unless another session has
+held the name since (the next ruling). **Known limit: a rename
 between SessionStarts goes unseen.** Nothing checks until the next
 SessionStart.
+
+**A re-decided session's generation** (GRO-50 lead note, 2026-11-10). It
+applies to a session `bind` decides again because it is unbound (other than a
+fork or a nested session) or provisional: G2's "launch names now disagree"
+once the names agree again, or a provisional binding whose lease ended.
+
+1. **The same session under the same name, which nobody else has held since,
+   keeps its generation**, as KTD4 has it: "Resume and compaction re-confirm
+   the existing generation". A provisional session that never held the name
+   has none, so when it turns current it takes the name's next one, its
+   first.
+2. **A session whose name another binding has held since stays out**, as
+   KTD4 has it: "a superseded session can't take the role back by re-running
+   its hook". It is unbound with the reason "another session held `<name>`
+   since; adopt the lease or start fresh to take it back", and supersedes
+   nothing. It returns only through `adopt`, which gives it a new generation,
+   or a fresh start, a new session id. A provisional session that another
+   session's adoption superseded already stays superseded; this rule covers
+   one that left the name's holders first, as a nonce mismatch unbinds it.
+3. **A session whose herdr name changed binds under the new name as a fresh
+   binding**, at that name's next generation.
+
+**How "held since" is decided:** each row records `seen_generation`, the
+name's generation counter when the row last held the name (its own
+generation) or went provisional for it. Every binding that becomes current
+raises the counter, so nobody else has held the name since while the counter
+still equals it. A generation alone can't tell this for a provisional row,
+which has none, and timestamps would compare clocks across rows. The bindings
+file is new on this branch and unreleased, so the column needs no migration
+and `SCHEMA_VERSION` stays 1, the first schema. The rule doesn't look at the
+boot: after a reboot, a session whose name another session held in the
+earlier boot stays out too, and that holder keeps its generation when it
+binds again.
 
 **A caller with unknown nesting** (`nested` None: a Codex caller with no walk
 evidence, or a Codex TUI). It may bind, but **it never supersedes a live
