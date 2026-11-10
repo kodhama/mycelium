@@ -91,7 +91,7 @@ def _adopt(args: argparse.Namespace) -> int:
     if not caller.resolved:
         print(f"mycelium adopt: unbound: {caller.reason}", file=sys.stderr)
         return REFUSED
-    if not os.path.lexists(resolved.bindings):
+    if not _bindings_exist(resolved):
         print(f"mycelium adopt: unbound: {bindings.NO_BINDING_YET}", file=sys.stderr)
         return REFUSED
     index = _index(resolved)
@@ -111,14 +111,13 @@ def _directory(args: argparse.Namespace) -> int:
 
     resolved = paths.resolve()
     index = _index(resolved)
+    context = _context()  # without the boot id, every binding would read dead
     rows: list[bindings.Binding] = []
     if os.path.lexists(resolved.bindings):
         with _opened(resolved) as store:
             rows = store.rows()
     try:
-        listed = directory.rows(
-            index, rows, _context(boot_required=False), directory.unhandled_in(resolved.store)
-        )
+        listed = directory.rows(index, rows, context, directory.unhandled_in(resolved.store))
     except (sqlite3.Error, OSError) as error:
         raise _Unavailable(f"the message store can't be read: {error}") from None
     print(json.dumps({"names": [row.to_json() for row in listed]}))
@@ -140,32 +139,40 @@ def _resolution(caller: identity.Caller) -> bindings.Resolution:
     if not caller.resolved:
         return bindings.Resolution("unbound", None, caller.reason)
     resolved = paths.resolve()
-    if not os.path.lexists(resolved.bindings):
-        if os.path.lexists(resolved.state) and not os.path.isdir(resolved.state):
-            raise _Unavailable(f"the state folder {resolved.state} is not a folder")
+    if not _bindings_exist(resolved):
         return bindings.Resolution("unbound", None, bindings.NO_BINDING_YET)
     with _opened(resolved) as store:
         return store.resolve_caller(caller, _context())
 
 
+def _bindings_exist(resolved: paths.Paths) -> bool:
+    """Whether the bindings file exists; a state path that is no folder is exit 3."""
+    if os.path.lexists(resolved.bindings):
+        return True
+    if os.path.lexists(resolved.state) and not os.path.isdir(resolved.state):
+        raise _Unavailable(f"the state folder {resolved.state} is not a folder")
+    return False
+
+
 @contextmanager
 def _opened(resolved: paths.Paths) -> Iterator[bindings.Bindings]:
-    """The bindings store, opened as a context; any failure to open is exit 3."""
+    """The bindings store, opened as a context. A failure to open it, or to use it
+    once open (a locked database, an I/O error), is exit 3, never a traceback."""
     try:
         store = bindings.open_bindings(resolved.bindings)
     except (StoreRefused, sqlite3.Error, OSError) as error:
         raise _Unavailable(f"the bindings store can't be read: {error}") from None
     try:
         yield store
+    except (StoreRefused, sqlite3.Error, OSError) as error:
+        raise _Unavailable(f"the bindings store can't be read: {error}") from None
     finally:
         store.close()
 
 
-def _context(
-    claims: Callable[[str], lease.Claim] | None = None, boot_required: bool = True
-) -> bindings.Context:
+def _context(claims: Callable[[str], lease.Claim] | None = None) -> bindings.Context:
     found = boot.boot_id()
-    if found is None and boot_required:
+    if found is None:
         raise _Unavailable("the boot id can't be read")
     return bindings.Context(
         boot=found,

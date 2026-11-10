@@ -1,5 +1,6 @@
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from importlib.metadata import version
@@ -315,3 +316,39 @@ def test_directory_with_the_helper_unavailable_exits_3(machine, capsys, monkeypa
     code, out, err = run(capsys, "directory")
     assert (code, out) == (3, "")
     assert "kodhama-cluster" in err
+
+
+def test_directory_without_a_boot_id_exits_3(machine, org, capsys):
+    machine.bind("s-1", name="mq-pm")
+    machine.monkeypatch.setattr(boot, "boot_id", lambda *a, **kw: None)
+    code, out, err = run(capsys, "directory")
+    assert (code, out) == (3, "")
+    assert "boot id" in err
+
+
+def locked(*args, **kwargs):
+    raise sqlite3.OperationalError("database is locked")
+
+
+@pytest.mark.parametrize(
+    ("argv", "method"),
+    [(["whoami"], "resolve_caller"), (["adopt", "n1"], "adopt"), (["directory"], "rows")],
+)
+def test_a_store_error_after_it_opens_exits_3_without_a_traceback(
+    machine, org, capsys, argv, method
+):
+    grove_claim(org, "mq-pm", "n1")
+    machine.bind("s-1", name="mq-pm")
+    machine.monkeypatch.setattr(bindings.Bindings, method, locked)
+    code, out, err = run(capsys, *argv)
+    assert (code, out) == (3, "")
+    assert "database is locked" in err
+    assert "Traceback" not in err
+
+
+def test_adopt_with_an_unreadable_state_folder_exits_3(machine, capsys):
+    machine.paths.state.parent.mkdir(parents=True)
+    machine.paths.state.write_text("a file where the folder should be")
+    code, out, err = run(capsys, "adopt", "n1")
+    assert (code, out) == (3, "")
+    assert "not a folder" in err
