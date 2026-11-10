@@ -18,14 +18,15 @@ the SendMessage hint, Codex through its queue (KTD9).
 """
 
 import os
-import sqlite3
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from mycelium.bindings import Binding, Context, iso, liveness
 from mycelium.index import Index
+from mycelium.store import Store, open_store
 
 DELIVERABILITY = ("live", "absent", "queue-only", "held", "gone")
 UNDECLARED_GONE_SECONDS = 7 * 24 * 60 * 60
@@ -71,28 +72,28 @@ def rows(
     return [_row(name, index, by_name.get(name, []), context, unhandled) for name in sorted(names)]
 
 
-def unhandled_in(store_path: Path) -> Unhandled:
+@contextmanager
+def unhandled_in(store_path: Path) -> Iterator[Unhandled]:
     """Whether a name's mailbox holds unhandled mail, read from the message store.
 
-    Reads over a read-only connection and creates nothing: with no store yet,
-    nothing is unhandled (KTD13)."""
+    The store opens once, through `open_store` and its rules (a symlink or a
+    newer schema is refused: StoreRefused), at the first question, and closes
+    with the context. With no store file yet, nothing is unhandled and nothing
+    is created (KTD13)."""
+    opened: list[Store] = []
 
     def unhandled(name: str) -> bool:
-        if not os.path.exists(store_path):
-            return False
-        uri = f"{store_path.absolute().as_uri()}?mode=ro"
-        db = sqlite3.connect(uri, uri=True, timeout=30)
-        try:
-            found = db.execute(
-                "SELECT 1 FROM messages m LEFT JOIN handled h ON h.message_id = m.id"
-                " WHERE m.role = ? AND h.message_id IS NULL LIMIT 1",
-                (name,),
-            ).fetchone()
-        finally:
-            db.close()
-        return found is not None
+        if not opened:
+            if not os.path.lexists(store_path):
+                return False
+            opened.append(open_store(store_path))
+        return opened[0].has_unhandled(name)
 
-    return unhandled
+    try:
+        yield unhandled
+    finally:
+        for store in opened:
+            store.close()
 
 
 def _row(

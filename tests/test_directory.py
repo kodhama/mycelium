@@ -1,6 +1,7 @@
 """The directory: each name's deliverability, harness, last seen and knock (R5, R36, R37; KTD3)."""
 
 import shutil
+import sqlite3
 
 import pytest
 from test_bindings import NOW, World, claude, codex_tui
@@ -8,7 +9,7 @@ from test_bindings import NOW, World, claude, codex_tui
 from mycelium import directory
 from mycelium.index import HOLD_SECONDS, Hold, Index, refresh
 from mycelium.launch import Launch
-from mycelium.store import open_store
+from mycelium.store import SCHEMA_VERSION, StoreRefused, open_store
 from mycelium.topology import Slice
 
 DAY = 24 * 60 * 60
@@ -195,15 +196,59 @@ def test_the_directory_reads_the_index_as_refresh_builds_it(world, tree):
     assert rows["ex-engine-lead-427"].deliverability == "held"
 
 
+def unhandled(path, name: str) -> bool:
+    with directory.unhandled_in(path) as found:
+        return found(name)
+
+
 def test_unhandled_mail_is_read_from_the_message_store(tmp_path):
     path = tmp_path / "data" / "store.sqlite3"
-    assert directory.unhandled_in(path)("scratch-probe") is False
+    assert unhandled(path, "scratch-probe") is False
     assert not path.exists()  # a read creates nothing (KTD13)
     store = open_store(path)
     message = store.append("scratch-probe", "hello")
     store.close()
-    assert directory.unhandled_in(path)("scratch-probe") is True
+    assert unhandled(path, "scratch-probe") is True
     store = open_store(path)
     store.mark_handled("scratch-probe", message)
     store.close()
-    assert directory.unhandled_in(path)("scratch-probe") is False
+    assert unhandled(path, "scratch-probe") is False
+
+
+def test_a_symlinked_message_store_is_refused_never_followed(tmp_path):
+    real = tmp_path / "elsewhere" / "store.sqlite3"
+    store = open_store(real)
+    store.append("scratch-probe", "hello")
+    store.close()
+    path = tmp_path / "data" / "store.sqlite3"
+    path.parent.mkdir(mode=0o700)
+    path.symlink_to(real)
+    with pytest.raises(StoreRefused, match="symlink"):
+        unhandled(path, "scratch-probe")
+
+
+def test_a_message_store_from_a_newer_mycelium_is_refused(tmp_path):
+    path = tmp_path / "data" / "store.sqlite3"
+    open_store(path).close()
+    with sqlite3.connect(path) as raw:
+        raw.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
+    with pytest.raises(StoreRefused, match="newer"):
+        unhandled(path, "scratch-probe")
+
+
+def test_the_message_store_is_opened_once_per_directory(world, tmp_path, monkeypatch):
+    for session, name in (("s-1", "probe-a"), ("s-2", "probe-b")):
+        world.bind(claude(1001, session), launch=name)
+    world.alive.clear()
+    world.now += 8 * DAY
+    path = tmp_path / "data" / "store.sqlite3"
+    open_store(path).close()
+    opened = []
+    monkeypatch.setattr(directory, "open_store", lambda p: opened.append(p) or open_store(p))
+    with directory.unhandled_in(path) as found:
+        rows = {
+            row.name: row
+            for row in directory.rows(INDEX, world.store.rows(), world.context(), found)
+        }
+    assert rows["probe-a"].deliverability == rows["probe-b"].deliverability == "gone"
+    assert opened == [path]

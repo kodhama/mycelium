@@ -117,8 +117,9 @@ def _directory(args: argparse.Namespace) -> int:
         with _opened(resolved) as store:
             rows = store.rows()
     try:
-        listed = directory.rows(index, rows, context, directory.unhandled_in(resolved.store))
-    except (sqlite3.Error, OSError) as error:
+        with directory.unhandled_in(resolved.store) as unhandled:
+            listed = directory.rows(index, rows, context, unhandled)
+    except (StoreRefused, sqlite3.Error, OSError) as error:
         raise _Unavailable(f"the message store can't be read: {error}") from None
     print(json.dumps({"names": [row.to_json() for row in listed]}))
     return 0

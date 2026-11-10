@@ -70,6 +70,14 @@ class SqliteStore:
         )
         return [Message(*row[:4], handled=bool(row[4])) for row in rows]
 
+    def has_unhandled(self, role: str) -> bool:
+        found = self._db.execute(
+            "SELECT 1 FROM messages m LEFT JOIN handled h ON h.message_id = m.id"
+            " WHERE m.role = ? AND h.message_id IS NULL LIMIT 1",
+            (role,),
+        ).fetchone()
+        return found is not None
+
     def mark_handled(self, role: str, message_id: int) -> None:
         with self._write():
             found = self._db.execute(

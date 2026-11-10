@@ -99,6 +99,16 @@ def test_mark_handled_shows_on_read_and_is_idempotent(store):
     assert message.handled is True
 
 
+def test_has_unhandled_says_whether_the_roles_mailbox_holds_unhandled_mail(store):
+    assert store.has_unhandled("role-01") is False
+    first = store.append("role-01", "one")
+    store.append("role-02", "theirs")
+    assert store.has_unhandled("role-01") is True
+    store.mark_handled("role-01", first)
+    assert store.has_unhandled("role-01") is False
+    assert store.has_unhandled("role-02") is True
+
+
 def test_mark_handled_refuses_another_roles_message(store):
     message_id = store.append("role-01", "hello")
     with pytest.raises(KeyError):
