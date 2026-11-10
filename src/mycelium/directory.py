@@ -100,11 +100,12 @@ def _row(
 ) -> Row:
     live = next((b for b in bound if b.state == "current" and liveness(b, context) != "dead"), None)
     shown = live or _latest(b for b in bound if b.state == "current") or _latest(bound)
-    deliverability = _deliverability(name, index, live, bound, context, unhandled)
+    declared = name in index.names()
+    deliverability = _deliverability(name, declared, index, live, bound, context, unhandled)
     can = deliverability == "live"
     return Row(
         name=name,
-        declared=name in index.names(),
+        declared=declared,
         deliverability=deliverability,
         harness=shown.harness if shown else None,
         generation=shown.generation if shown else None,
@@ -115,13 +116,14 @@ def _row(
 
 def _deliverability(
     name: str,
+    declared: bool,
     index: Index,
     live: Binding | None,
     bound: list[Binding],
     context: Context,
     unhandled: Unhandled,
 ) -> str:
-    if name in index.names():
+    if declared:
         run = index.run(name)
         if run == "done":
             return "gone"
