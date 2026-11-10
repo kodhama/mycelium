@@ -6,8 +6,13 @@ Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
 `adopt`, `resolve_caller` (for `whoami`) and `authorize`; the directory reads
 `rows`. The rules are in docs/decisions/bindings.md. In short:
 
-- **Idempotent on the key** (KTD4): the same session's hook in the same
-  process re-confirms the binding and changes only `last_seen`.
+- **Idempotent on the key** (KTD4): a SessionStart that continues a session
+  (its hook re-run in the same process, or its resume or compaction in any
+  process of this boot) re-confirms the binding: it keeps its state,
+  generation and nonce, takes the caller's pid and evidence, and passes the
+  G2 check. Unbound sessions other than forks and nested ones, provisional
+  ones, and a superseded one whose name its own process now holds are
+  decided again instead.
 - **Generations, per name**, rise when a binding becomes current by a fresh
   start, a `/clear` or a `/resume` onto another session in the same process,
   or an adoption. A resume or compaction of the same session keeps its own.
@@ -40,6 +45,12 @@ SOURCES = ("startup", "resume", "compact", "clear", "fork")
 """SessionStart sources, as Claude names them; U11 maps Codex's onto these."""
 
 LAUNCH_NAMES_NOW_DISAGREE = "launch names now disagree"
+FORK = "a fork binds unbound unless it adopts the lease nonce"
+NESTED = "nested: another harness runs above this one; adopt the lease nonce to bind"
+_STAYS_UNBOUND = (FORK, NESTED)
+"""The unbound reasons a SessionStart re-confirms; every other unbound session is decided again."""
+_CONTINUES = ("resume", "compact")
+"""The sources that continue the same session, even in a new process."""
 NO_BINDING_YET = "no binding for this session yet: its SessionStart hook has not bound it"
 _HOLDING = ("current", "provisional")
 """The states that hold a name: a new current binding supersedes them."""
@@ -277,12 +288,8 @@ class Bindings:
             return Bound(None, reason="the boot id can't be read, so nothing binds")
         with files.write(self._db):
             row = self._get(caller.harness, caller.session_id)
-            same_process = row is not None and row.boot == context.boot and row.pid == caller.pid
-            if same_process and not (row.state == "unbound" and row.name is None):
-                state, reason = reconfirm(row, event.launch)
-                found = replace(row, state=state, reason=reason, last_seen=context.now)
-                self._put(found)
-                return Bound(found)
+            if row is not None and self._continues(row, event, context):
+                return self._reconfirm(row, event, context)
             return self._decide(row, event, context)
 
     def adopt(self, caller: Caller, nonce: str, context: Context) -> Bound:
@@ -353,7 +360,58 @@ class Bindings:
             raise Refused(f"{found.state}: {found.reason}", found.state)
         return found.binding
 
-    # The decision for a session not re-confirming in its own process.
+    # Re-confirming a session that continues (KTD4).
+
+    def _continues(self, row: Binding, event: Event, context: Context) -> bool:
+        """Whether this SessionStart continues the row's session, which keeps its binding.
+
+        The same session in the same process (a hook re-run), or a resume or
+        compaction of it in any process of this boot (herdr restores a pane with
+        `claude --resume`). Re-decided instead: an earlier boot's row, an unbound
+        session other than a fork or a nested one, a provisional one (its lease may
+        have ended), and a superseded one whose name another session of the caller's
+        own process now holds (a /resume back, lessons G3)."""
+        caller = event.caller
+        if row.boot != context.boot:
+            return False
+        if row.pid != caller.pid and event.source not in _CONTINUES:
+            return False
+        if row.state == "unbound":
+            return row.reason in _STAYS_UNBOUND
+        if row.state == "provisional":
+            return False
+        if row.state == "superseded":
+            return not self._held_in_process(row, caller, context)
+        return True
+
+    def _reconfirm(self, row: Binding, event: Event, context: Context) -> Bound:
+        """Keep the state, generation and nonce; take the caller's pid and evidence."""
+        caller = event.caller
+        state, reason = reconfirm(row, event.launch)
+        found = replace(
+            row,
+            state=state,
+            reason=reason,
+            pid=caller.pid,
+            evidence=caller.source,
+            last_seen=context.now,
+        )
+        self._put(found)
+        return Bound(found, self._supersede(self._same_process(caller, context), found))
+
+    def _held_in_process(self, row: Binding, caller: Caller, context: Context) -> bool:
+        """Whether a session of the caller's own process holds the row's name, current."""
+        if caller.pid is None or row.name is None:
+            return False
+        return any(
+            other.state == "current"
+            and other.key != row.key
+            and other.pid == caller.pid
+            and other.boot == context.boot
+            for other in self._named(row.name)
+        )
+
+    # The decision for a session that does not continue its binding.
 
     def _decide(self, row: Binding | None, event: Event, context: Context) -> Bound:
         caller, name = event.caller, event.launch.name
@@ -376,10 +434,9 @@ class Bindings:
         if name is None:
             found = replace(found, reason=event.launch.reason)
         elif caller.nested:
-            reason = "nested: another harness runs above this one; adopt the lease nonce to bind"
-            found = replace(found, reason=reason)
+            found = replace(found, reason=NESTED)
         elif event.source == "fork":
-            found = replace(found, reason="a fork binds unbound unless it adopts the lease nonce")
+            found = replace(found, reason=FORK)
         else:
             found = self._for_name(found, row, own, caller, context)
         if found.state == "current":

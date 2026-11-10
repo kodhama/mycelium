@@ -441,6 +441,81 @@ def test_a_clear_in_the_process_that_holds_the_lease_keeps_the_lease(world):
     assert cleared.binding.generation == 2
 
 
+def test_a_clear_then_a_resume_back_in_the_same_pid_makes_the_resumed_session_current(world):
+    # Lessons G3: one process /resumes back onto the session it left.
+    a, b = claude(1001, "s-a"), claude(1001, "s-b")
+    world.bind(a)
+    world.bind(b, source="clear")
+    back = world.bind(a, source="resume")
+    assert back.binding.state == "current"
+    assert back.binding.generation == 3
+    assert [old.session_id for old in back.superseded] == ["s-b"]
+    assert world.resolve(a).state == "current"
+    assert world.resolve(b).state == "superseded"
+
+
+# KTD4: a resume in a new process (herdr restores `claude --resume <sid>`, same boot).
+
+
+def test_a_lease_holder_resumed_in_a_new_pid_keeps_its_lease_and_a_later_clear_inherits_it(
+    world,
+):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    world.alive.discard(1001)
+    restored = world.bind(claude(1500, "s-a"), source="resume")
+    assert (restored.binding.state, restored.binding.generation) == ("current", 1)
+    assert (restored.binding.nonce, restored.binding.pid) == ("n1", 1500)
+    assert restored.superseded == ()
+    cleared = world.bind(claude(1500, "s-a2"), source="clear")
+    assert (cleared.binding.state, cleared.binding.nonce) == ("current", "n1")
+    assert cleared.binding.generation == 2
+    live = world.store.live_bindings(world.context())
+    assert [row.session_id for row in live] == ["s-a2"]
+
+
+def test_a_superseded_session_resumed_in_a_new_pid_stays_superseded(world):
+    world.bind(A)
+    world.bind(B)
+    resumed = world.bind(claude(1500, "s-a"), source="resume")
+    assert resumed.binding.state == "superseded"
+    assert resumed.superseded == ()
+    assert world.resolve(B).state == "current"
+
+
+def test_a_fork_resumed_in_a_new_pid_stays_unbound(world):
+    world.bind(A)
+    world.bind(claude(3003, "s-fork"), source="fork")
+    resumed = world.bind(claude(3500, "s-fork"), source="resume")
+    assert resumed.binding.state == "unbound"
+    assert resumed.binding.reason == bindings.FORK
+    assert resumed.superseded == ()
+    assert world.resolve(A).state == "current"
+
+
+def test_a_session_unbound_by_g2_is_decided_again_once_its_names_agree(world):
+    world.bind(A)
+    renamed = Launch(None, "launch names disagree", {"pane": "ogham-lead"}, "named")
+    world.bind(A, launch=renamed, source="resume")
+    again = world.bind(A, source="resume")
+    assert again.binding.state == "current"
+    assert again.binding.name == "ogham-worker"
+
+
+def test_a_provisional_binding_whose_claim_expired_becomes_current_at_its_next_resume(world):
+    world.claim(nonce="n1")
+    first = world.bind(A)
+    assert first.binding.state == "provisional"
+    twice = world.bind(A)  # the hook installed twice: nothing changes
+    assert (twice.binding.state, twice.superseded) == ("provisional", ())
+    world.claim(nonce="n1", expires="2020-01-01T00:00:00.000Z")
+    resumed = world.bind(A, source="resume")
+    assert resumed.binding.state == "current"
+    assert resumed.binding.generation == 1
+
+
 # The nested=None rule (lead ruling, GRO-50).
 
 
