@@ -112,17 +112,28 @@ built against herdr 0.9.3. The rules and their limits are in
 ## Bindings and the directory
 
 **Each session is bound to the role it was launched as, or told plainly that
-it isn't.** The harness hooks bind it at every SessionStart; they arrive in a
-later release. The rules are in [the decision](docs/decisions/bindings.md).
+it isn't.** The harness hooks bind it at every SessionStart. The rules are in
+[the decision](docs/decisions/bindings.md).
+
+- **Until the hooks ship (plan U8 for Claude, U11 for Codex), nothing
+  binds.** `whoami` and `adopt` exit 1 for every session, with "no binding
+  for this session yet".
+- **`directory` exits 3 until the cluster helper, `kodhama-cluster`, is
+  installed**, since it reads the index through it.
 
 - **The launch name** comes from the harness's session name, `KODHAMA_AGENT`
   and herdr's name for the session's own pane. Every source present must
   agree; if none names it, or they disagree, the session is unbound. The pane
   title never counts, and `@maintainer` is never bound.
 - **The newest session for a name is current**, and the one it replaces is
-  superseded and told once. Under grove's lease only the lease nonce makes a
+  superseded. The supersede is recorded once, so its notice can go out once;
+  sending it is a later release's (mail, U5), and until then nothing tells
+  the superseded session. Under grove's lease only the lease nonce makes a
   session current: `mycelium adopt <nonce>`. A fork, or a session started
   inside another one, stays unbound unless it adopts the nonce.
+- **A resume or compaction keeps the session's binding**, even in a new
+  process, as when herdr restores a pane: a current session stays current
+  with its generation and lease, and a superseded one stays superseded.
 - **After a reboot every binding is dead**, so the role reads as absent until
   its session binds again.
 - **A name declared in no cluster still binds**, as undeclared.
@@ -137,7 +148,16 @@ compares it with `KODHAMA_AGENT`.
 | 0 | the caller is current |
 | 1 | refused: provisional, superseded or unbound; the reason is on stderr and stdout is empty |
 | 2 | a usage error: an unknown command or bad arguments |
-| 3 | mycelium could not tell: the bindings store, state folder, index or cluster helper can't be read, or the boot id is unknown |
+| 3 | mycelium could not tell: the bindings store or state folder can't be read or fails once open, or the boot id is unknown |
+
+`whoami` reads neither the index nor the cluster helper. `adopt` and
+`directory` read both, and exit 3 when either can't be read.
+
+**`mycelium adopt <nonce>` adopts grove's lease.** On success it prints what
+`whoami` prints and exits 0. It uses the same exit codes: 1 when it refuses
+(no binding yet, no lease, a wrong nonce, a claim from an earlier boot, an
+expired one, or a live one another session holds), 2 for a usage error, and
+3 as above, or when the index or the cluster helper can't be read.
 
 Right after an in-place `/clear`, `whoami` exits 1 until the clear's
 SessionStart hook has bound the new session id, then 0 with the next
@@ -148,6 +168,15 @@ generation.
 "last_seen", "knock": {"can", "how"}}]}`. Deliverability is `live`, `absent`,
 `queue-only`, `held` or `gone`, computed from the clusters and the bindings
 each time. A name can be knocked only while live.
+
+- **A name declared in no cluster is live only with a live current
+  binding**; a provisional one doesn't count.
+- **Null fields:** `harness`, `generation` and `last_seen` are null for a
+  name with no binding, and `generation` also when its binding was never
+  current. `knock.how` is null unless `knock.can` is true.
+- **Exit codes:** 0 when printed, 2 for a usage error, and 3 when the index,
+  the cluster helper, the bindings store or the message store can't be read,
+  or the boot id is unknown.
 
 ## What the store survives
 

@@ -6,8 +6,10 @@ Exit codes for `whoami`, `adopt` and `directory` (lead ruling, GRO-50):
 - **1**: refused: the caller is provisional, superseded or unbound, or the
   lease refused the adoption. The reason is on stderr, and stdout is empty.
 - **2**: a usage error: an unknown command or bad arguments.
-- **3**: mycelium could not tell: the bindings store, the state folder, the
-  index or the cluster helper could not be read, or the boot id is unknown.
+- **3**: mycelium could not tell: the bindings store or the state folder could
+  not be read, or failed once open, or the boot id is unknown. `adopt` and
+  `directory` also exit 3 when the index or the cluster helper can't be read
+  (`whoami` reads neither), and `directory` when the message store can't be.
 """
 
 import argparse
