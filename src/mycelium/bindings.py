@@ -424,7 +424,8 @@ class Bindings:
             pid=caller.pid,
             evidence=caller.source,
             boot=context.boot,
-            generation=row.generation if row is not None else None,
+            # A generation belongs to its name: a row decided under another name drops it.
+            generation=row.generation if row is not None and row.name == name else None,
             state="unbound",
             reason=None,
             nonce=None,

@@ -516,6 +516,14 @@ def test_a_provisional_binding_whose_claim_expired_becomes_current_at_its_next_r
     assert resumed.binding.generation == 1
 
 
+def test_a_session_decided_under_another_name_does_not_carry_the_old_names_generation(world):
+    world.bind(A)  # ogham-worker, generation 1
+    world.claim(name="ogham-lead", nonce="n1")
+    renamed = world.bind(claude(1500, "s-a"), launch="ogham-lead")
+    assert (renamed.binding.name, renamed.binding.state) == ("ogham-lead", "provisional")
+    assert renamed.binding.generation is None
+
+
 # The nested=None rule (lead ruling, GRO-50).
 
 
