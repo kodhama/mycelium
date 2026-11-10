@@ -82,11 +82,17 @@ class PaneIdentity:
 def read_identity(
     pane_id: str, command: Sequence[str] = COMMAND, timeout: float = TIMEOUT_SECONDS
 ) -> PaneIdentity | None:
-    """The pane's identity, or None when herdr knows no such pane. Raises PaneUnavailable."""
+    """The pane's identity, or None when herdr knows no such pane. Raises PaneUnavailable.
+
+    Its two herdr calls share one `timeout`, as `find_pane`'s scan does."""
+    deadline = time.monotonic() + timeout
     result = _ask(command, ("pane", "get", pane_id), timeout, missing="pane_not_found")
     if result is None:
         return None
-    agent = _ask(command, ("agent", "get", pane_id), timeout, missing="agent_not_found")
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise _Stalled(f"herdr did not answer within {timeout:g}s")
+    agent = _ask(command, ("agent", "get", pane_id), left, missing="agent_not_found")
     try:
         record = _object(result.get("pane"), "pane")
         session_id = _session(record)

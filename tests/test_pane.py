@@ -423,3 +423,14 @@ def test_a_title_with_glyphs_reads_whole(herdr, tmp_path, monkeypatch):
     glyphs = pane("w5:p1", agent="claude", session=SESSION, title="◑ role-01 ✳")
     with_state(tmp_path, monkeypatch, panes=[glyphs], agents=[])
     assert read_identity("w5:p1", command=HERDR).title == "◑ role-01 ✳"
+
+
+def test_both_identity_reads_share_one_deadline(herdr, tmp_path, monkeypatch):
+    # Each read answers in 0.8 s, inside a 1.2 s timeout on its own; the two together
+    # outlast it. A shared deadline cuts the second read; separate ones let it finish.
+    delayed = [[["pane", "get", "w1:p1"], 0.8], [["agent", "get", "w1:p1"], 0.8]]
+    with_state(tmp_path, monkeypatch, delayed=delayed)
+    started = time.monotonic()
+    with pytest.raises(PaneUnavailable, match="did not answer"):
+        read_identity("w1:p1", command=HERDR, timeout=1.2)
+    assert time.monotonic() - started < 1.5
