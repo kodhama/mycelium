@@ -207,6 +207,19 @@ def reconfirm(binding: Binding, launch: Launch) -> tuple[str, str | None]:
     return binding.state, binding.reason
 
 
+def claim_reader(index: Any) -> Callable[[str], lease.Claim]:
+    """`Context.claim` from the index: grove's claim sits in the name's own checkout,
+    under its declared name (cluster spec §1; docs/decisions/bindings.md)."""
+
+    def claim(name: str) -> lease.Claim:
+        found = index.slice(name)
+        if found is None:
+            return lease.Claim("none", reason=f"no cluster declares {name}, so it has no lease")
+        return lease.read(lease.claim_path(found.home, found.declared_name))
+
+    return claim
+
+
 def process_alive(
     table: Callable[[], Mapping[int, identity.Proc]] = identity.process_table,
 ) -> Callable[[int, str], bool | None]:
