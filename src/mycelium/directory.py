@@ -150,15 +150,22 @@ def _deliverability(
     # for a name never held, since it was first seen (lead ruling, GRO-50).
     if live:
         return "live"
-    last = max((_held_until(b) for b in bound), default=None)
+    last = _clock_start(bound)
     if last is not None and context.now - last >= UNDECLARED_GONE_SECONDS:
         if not unhandled(name):
             return "gone"
     return "queue-only"
 
 
-def _held_until(binding: Binding) -> float:
-    return binding.bound_at if binding.bound_seen is None else binding.bound_seen
+def _clock_start(bound: list[Binding]) -> float | None:
+    """When an undeclared name was last seen held, or, if never, first seen (R37).
+
+    A binding never current under the name doesn't move the clock, so a fork or
+    a session with no launch name can't keep the name from going."""
+    held = [b.bound_seen for b in bound if b.bound_seen is not None]
+    if held:
+        return max(held)
+    return min((b.bound_at for b in bound), default=None)
 
 
 def _latest(bound: Iterable[Binding]) -> Binding | None:

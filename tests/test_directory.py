@@ -325,3 +325,20 @@ def test_a_name_never_held_runs_its_clock_from_when_it_was_first_seen(world):
     assert table(world)["scratch-probe"].deliverability == "queue-only"
     world.now += 2 * DAY
     assert table(world)["scratch-probe"].deliverability == "gone"
+
+
+def test_a_session_that_never_holds_the_name_never_restarts_its_clock(world):
+    world.bind(claude(1001, "s-1"), launch="scratch-probe")  # held on day 0
+    world.alive.clear()
+    world.now += 5 * DAY
+    world.bind(claude(2002, "s-fork"), launch="scratch-probe", source="fork")  # never holds it
+    world.now += 3 * DAY
+    assert table(world)["scratch-probe"].deliverability == "gone"
+
+
+def test_a_name_never_held_runs_its_clock_from_its_first_sighting(world):
+    world.bind(claude(1001, "s-fork-1"), launch="scratch-probe", source="fork")
+    world.now += 5 * DAY
+    world.bind(claude(2002, "s-fork-2"), launch="scratch-probe", source="fork")
+    world.now += 3 * DAY
+    assert table(world)["scratch-probe"].deliverability == "gone"
