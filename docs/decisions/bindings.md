@@ -298,3 +298,55 @@ every name a binding carries. Each row holds `name`, `declared`,
 - **Null fields:** `harness`, `generation` and `last_seen` are null for a
   name with no binding, and `generation` also when the binding shown was
   never current. `knock.how` is null unless `knock.can`.
+
+## 2026-11-12 lead rulings and review fixes (GRO-50)
+
+**A reboot ends the stay-out rule** (GRO-50 lead note, 2026-11-10). This
+replaces the last sentence of "How held since is decided" above. **Only a
+holder from the current boot keeps a session out.** After a reboot, a session
+that returns, such as a pane herdr restores, is a new process and a fresh
+start under KTD4. So it takes the name's next generation, as U4's reboot
+scenarios have it. Otherwise a name whose earlier holder never came back
+would have no possible holder, and the role would sit absent until someone
+started it by hand. Within one boot the rule stays as it was.
+
+- **How:** the `generations` table records `held_boot`, the boot in which a
+  binding last became current for the name. A binding that keeps its
+  generation across a reboot updates it too. A session stays out only when
+  the counter moved past its `seen_generation` and `held_boot` is the current
+  boot.
+- **Pinned:**
+  - X held the name, Y superseded X, then a reboot. Only X's pane comes back,
+    and X becomes current at the next generation.
+  - The same holds for a session that G2 left unbound while Y held the name.
+  - A holder that binds in the new boot, fresh or restored, still keeps such
+    a session out.
+
+**A SessionStart with no launch name keeps the row's old name, generation
+and `seen_generation`** (lead ruling (i), same note). The directory row now
+carries `state`, the shown binding's state, so that row reads `unbound`. It
+never makes the name live or knockable, since only a live current binding
+does. **Its `last_seen` still counts toward an undeclared name's 7-day
+clock**, because the directory's clock reads every binding under the name.
+An undeclared name stays queue-only, never gone, while such a session keeps
+starting under it. That keeps mail rather than dropping it.
+
+**A session decided again keeps the lease it adopted.** When `bind` decides a
+session again, the row's own nonce counts: both for whether its live claim
+runs and for the heir that inherits the nonce. So a session that G2 unbound
+and whose names agree again returns current with its nonce, and a later
+`/clear` still inherits the lease.
+
+**`adopt` refuses an earlier-boot or expired claim before it checks the
+nonce.** Such a claim can't be adopted, so a mismatched nonce on it no longer
+unbinds a provisional session. A session `adopt` makes current also
+supersedes any other session of its own process, as `bind` does.
+
+**`bound_at` restarts when a session is decided under a new name.** It says
+since when the session has been bound to that name.
+
+**A session that `bind` decides supersedes the other sessions of its own
+process, whatever state it gets itself.** This is by design. One process runs
+one session, and a `/clear` or `/resume` ends the session the process ran
+before. So even an unbound or provisional result marks the process's earlier
+session superseded.

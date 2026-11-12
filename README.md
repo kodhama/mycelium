@@ -3,9 +3,10 @@
 **kodhama's agent communication layer**: every agent knows its manager, peers
 and reports, and gets its mail.
 
-**Status: early.** This release holds the command line's skeleton, the folder
-resolver, the message store, the org index, the bindings and the directory.
-Mailboxes and the harness hooks come in later releases.
+**Status: early.** v0.1.0 holds the folder resolver and the message store.
+`main` adds, unreleased, the org index, the bindings and the directory. The
+command line offers only `--version`, `paths`, `whoami`, `adopt` and
+`directory` so far. Mailboxes and the harness hooks come later.
 
 ## Run it
 
@@ -91,18 +92,28 @@ decision, and rebuilds the index when any cluster's revision changes.
 an argument.** It climbs from its own process to the nearest harness.
 
 - **Claude Code** is identified by its `claude` process.
-- **Codex** is identified by the thread id it sets, `CODEX_THREAD_ID`.
-  Inside Codex's sandbox `ps` is denied, and a Codex TUI runs its tools under
-  one shared daemon.
-- **A session started inside another one** is reported as nested. Where
-  `ps` is denied, `CODEX_THREAD_ID` beside a Claude variable means one runs
-  inside the other, so that caller is nested and unbound. A variable
-  inherited from wherever the shell started reads the same.
+- **Codex:** the walk finds a `codex exec` caller by its `codex` process.
+  The session id is always the thread id Codex sets, `CODEX_THREAD_ID`.
+  Inside Codex's sandbox `ps` is denied, so there the thread id alone
+  identifies the caller. A Codex TUI runs its tools under one shared daemon,
+  so its pid is unknown.
+- **A session started inside another one** is reported as nested when the
+  walk shows it. Where `ps` is denied, `CODEX_THREAD_ID` beside a Claude
+  variable means one runs inside the other, so that caller is nested and
+  unbound. A variable inherited from wherever the shell started reads the
+  same.
+- **Nesting can be unknown.** A Codex TUI caller, even one under a Claude
+  session, and a caller found by thread id alone with no Claude variable
+  beside it come back with nesting unknown, never "not nested". Such a caller can bind, but never supersedes
+  a binding the walk verified.
 - **A Codex TUI is recognised by its shared daemon's path, on macOS.** That
   Codex starts the daemon by its path is not yet confirmed on a live Codex
   (plan U11 checks it). Linux `ps` shows no path, so there it is never
   recognised.
 - **Droid and opencode** callers resolve as unbound for now.
+- **Identity guards against mislabelling, not against an attacker.** A
+  process of the same user can pose as a session by its process name and
+  variables.
 
 herdr panes are read through one module, which only reads: a pane's identity,
 its foreground processes, and the pane that holds a given process. It was
@@ -140,8 +151,13 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   a provisional one that never held it takes the name's next. If another
   session has held the name since, it stays unbound: re-running its hook
   can't take the role back, and only `mycelium adopt <nonce>` or a fresh
-  session can. Under a new herdr name it binds fresh, at that name's next
+  session can. Only a holder from the current boot keeps it out: after a
+  reboot, a session that returns is a fresh start at the name's next
+  generation. Under a new herdr name it binds fresh, at that name's next
   generation.
+- **A SessionStart with no launch name keeps the session's old name**, as
+  unbound. The directory shows it as `"state": "unbound"`, and it never makes
+  the name live.
 - **After a reboot every binding is dead**, so the role reads as absent until
   its session binds again.
 - **A name declared in no cluster still binds**, as undeclared.
@@ -173,15 +189,16 @@ generation.
 
 **`mycelium directory` prints who is reachable**, as JSON:
 `{"names": [{"name", "declared", "deliverability", "harness", "generation",
-"last_seen", "knock": {"can", "how"}}]}`. Deliverability is `live`, `absent`,
+"state", "last_seen", "knock": {"can", "how"}}]}`. `state` is the shown
+binding's: `current`, `provisional`, `superseded` or `unbound`. Deliverability is `live`, `absent`,
 `queue-only`, `held` or `gone`, computed from the clusters and the bindings
 each time. A name can be knocked only while live.
 
 - **A name declared in no cluster is live only with a live current
   binding**; a provisional one doesn't count.
-- **Null fields:** `harness`, `generation` and `last_seen` are null for a
-  name with no binding, and `generation` also when its binding was never
-  current. `knock.how` is null unless `knock.can` is true.
+- **Null fields:** `harness`, `generation`, `state` and `last_seen` are null
+  for a name with no binding, and `generation` also when its binding was
+  never current. `knock.how` is null unless `knock.can` is true.
 - **Exit codes:** 0 when printed, 2 for a usage error, and 3 when the index,
   the cluster helper, the bindings store or the message store can't be read,
   or the boot id is unknown.
