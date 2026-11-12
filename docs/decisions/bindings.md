@@ -329,7 +329,7 @@ started it by hand. Within one boot the rule stays as it was.
     a session out, and so does one that holds again at its old generation.
 
 **A SessionStart with no launch name keeps the row's old name, generation
-and `seen_holds`** (lead ruling (i), same note). The directory row now
+and `seen_generation`** (lead ruling (i), same note). The directory row now
 carries `state`, the shown binding's state, so that row reads `unbound` when
 it is the one shown. A current binding under the name, even a dead one from
 an earlier boot, is shown first. It
@@ -423,3 +423,30 @@ GRO-50):
 - **Every `seen_generation` above**, in "the pieces", the re-decide rule and
   "How held since is decided", now means `seen_holds`, as the replacement
   list says.
+
+**The last code round of the 2026-11-12 resume** (re-check of `e153df4`
+to `71dad14`, GRO-50):
+
+- **Kept out stays out for the boot.** A session unbound with "another
+  session held `<name>` since" is re-confirmed, still unbound, at each later
+  SessionStart of the boot, as a fork is. Before, a row from an earlier boot
+  that never held the name was rewritten with this boot and could take the
+  name at its next start. A new herdr name still binds it fresh under that
+  name (rule 3).
+- **An heir must have seen every hold of the name.** A `/clear` or
+  `/resume` inherits a nonce only from a session of its process whose
+  `seen_holds` equals the name's count. A session another one took the name
+  from, and its process, inherit nothing.
+- **A superseded session whose process runs on** in another session, such as
+  a lease holder's `/clear` that has no launch name yet (lessons C2), still
+  keeps the lease in force. One process runs one session, so the process
+  still holds the lease. This qualifies "a superseded session never keeps a
+  lease in force" above.
+- **The returning paths, corrected:** a session kept out after a reboot
+  returns only as a fresh session, or by `adopt` on a lease grove offers it.
+  `adopt` refuses a live claim that names another session, so "only through
+  `adopt` or a fresh session" above means that. The lead's acceptance stands.
+- **Known limit (KTD6, the lead agreed):** a kept-out session that grove's
+  live claim still names keeps the lease in force through the claim's
+  session. Other sessions go provisional, and only that session can adopt
+  the nonce. The lease is that session's.
