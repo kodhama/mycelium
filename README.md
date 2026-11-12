@@ -157,11 +157,12 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   session can. Under a new herdr name it binds fresh, at that name's next
   generation.
 - **After a reboot, the first session to bind a name holds it.** Every
-  binding from the earlier boot is decided again, whatever its state: a
-  session restored after a reboot is current, at the name's next generation
-  if another session held the name after it, or its own if not. Once a
-  session of the new boot holds the name, the others restored after it stay
-  out, as above.
+  binding from the earlier boot is decided again, whatever its state, by the
+  usual rules: a lease or a caller of unknown nesting can still hold it back.
+  Otherwise a session restored after a reboot is current, at the name's next
+  generation if another session held the name after it, or its own if not.
+  Once a session of the new boot holds the name, the others restored after
+  it stay out, as above, a fork included.
 - **A session decided again with no launch name keeps its old name**, as
   unbound. The directory shows it as `"state": "unbound"` unless a current
   binding under the name is shown first, and it never makes the name live or

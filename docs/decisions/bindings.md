@@ -329,7 +329,7 @@ started it by hand. Within one boot the rule stays as it was.
     a session out, and so does one that holds again at its old generation.
 
 **A SessionStart with no launch name keeps the row's old name, generation
-and `seen_generation`** (lead ruling (i), same note). The directory row now
+and `seen_holds`** (lead ruling (i), same note). The directory row now
 carries `state`, the shown binding's state, so that row reads `unbound` when
 it is the one shown. A current binding under the name, even a dead one from
 an earlier boot, is shown first. It
@@ -403,3 +403,22 @@ GRO-50):
   live (`unverified`), and its successor can't inherit or adopt the lease.
   So the successor stays provisional until the predecessor is superseded.
   Plan U11 settles pid-less liveness.
+
+**After the last review at `e153df4`** (GRO-50):
+
+- **A superseded session never keeps a lease in force.** "Any running session
+  of the name" above leaves out a superseded one. It gave the role up, and
+  with it the lease, though it keeps its nonce on the row.
+- **A session kept out gives up its nonce.** Another session holds the name
+  now, and with it the lease if it adopted one. So a `/clear` in the kept-out
+  process inherits nothing and goes provisional.
+- **An earlier-boot row that never held the name**, a fork for instance,
+  stays out like any other once a session of this boot holds the name.
+- **Known consequence** of the reboot rule: when this boot's first holder
+  then dies, a session it kept out can come back only through `adopt` or a
+  fresh session. For an undeclared name, which has no lease, that means a
+  fresh session. The same dead end already held within one boot for a
+  session kept out.
+- **Every `seen_generation` above**, in "the pieces", the re-decide rule and
+  "How held since is decided", now means `seen_holds`, as the replacement
+  list says.
