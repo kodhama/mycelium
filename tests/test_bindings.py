@@ -1029,14 +1029,3 @@ def test_a_clear_never_inherits_a_lease_another_session_adopted_since(world):
     cleared = world.bind(claude(1001, "s-a2"), source="clear")  # A never re-ran its hook
     assert cleared.binding.state == "provisional"
     assert world.resolve(B).state == "current"
-
-
-def test_a_lease_holders_clear_with_no_launch_name_keeps_the_lease_in_force(world):
-    world.claim(nonce="n1")
-    world.bind(A)
-    world.adopt(A, "n1")
-    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
-    nameless = world.bind(claude(1001, "s-a2"), launch=NO_NAME, source="clear")
-    assert nameless.binding.state == "unbound"
-    outsider = world.bind(B)
-    assert outsider.binding.state == "provisional"

@@ -506,15 +506,12 @@ class Bindings:
         claim = context.claim(found.name)
         # The row itself counts: a session decided again keeps the lease it adopted.
         mine = [] if row is None or row.boot != context.boot else [replace(row, pid=caller.pid)]
-        # Any running session of the name can hold the lease, an unbound one included.
-        # A superseded one has given it up, unless its own process runs on in another
-        # session (one process runs one session: a /clear that has no name yet).
-        running = self._running_processes(context.boot)
+        # Any running session of the name can hold the lease, an unbound one included;
+        # a superseded one has given it up.
         named = [
             other
             for other in self._named(found.name)
-            if other.key != found.key
-            and (other.state != "superseded" or (other.harness, other.pid) in running)
+            if other.key != found.key and other.state != "superseded"
         ]
 
         def runs(claimed: lease.Claim) -> bool:
@@ -615,15 +612,6 @@ class Bindings:
             (caller.harness, caller.pid, context.boot, caller.session_id),
         )
         return [_binding(row) for row in found]
-
-    def _running_processes(self, boot: str) -> set[tuple[str, int]]:
-        """(harness, pid) of every process of this boot with a session not superseded."""
-        found = self._db.execute(
-            "SELECT harness, pid FROM bindings WHERE boot = ? AND pid IS NOT NULL"
-            " AND state != 'superseded'",
-            (boot,),
-        )
-        return {(harness, pid) for harness, pid in found}
 
     def _holds_session(self, claim: lease.Claim, row: Binding) -> bool:
         """The live claim's session is this one, or another session of its process."""
