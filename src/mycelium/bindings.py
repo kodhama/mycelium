@@ -496,14 +496,20 @@ class Bindings:
     ) -> Binding:
         counter, holds, held_boot = self._name_state(found.name)
         if held_boot == context.boot and self._held_since(row, found, holds, context.boot):
-            return replace(found, reason=HELD_SINCE.format(name=found.name))
+            # Another session holds the name now, and with it any lease it adopted.
+            return replace(found, reason=HELD_SINCE.format(name=found.name), nonce=None)
         found = replace(found, nonce=None)  # decided afresh below, from the lease
         others = self._rivals(found)
         claim = context.claim(found.name)
         # The row itself counts: a session decided again keeps the lease it adopted.
         mine = [] if row is None or row.boot != context.boot else [replace(row, pid=caller.pid)]
-        # Any running session of the name can hold the lease, an unbound one included.
-        named = [other for other in self._named(found.name) if other.key != found.key]
+        # Any running session of the name can hold the lease, an unbound one included;
+        # a superseded one has given it up.
+        named = [
+            other
+            for other in self._named(found.name)
+            if other.key != found.key and other.state != "superseded"
+        ]
 
         def runs(claimed: lease.Claim) -> bool:
             return any(
@@ -548,10 +554,12 @@ class Bindings:
         GRO-50). A row from an earlier boot, in any state, stays out the same way
         once a session of this boot has held the name: after a reboot the first
         session restored holds the role (ce-doc-review, GRO-50)."""
+        if row is None or row.name != found.name:
+            return False
+        if row.boot != boot:  # it never held the name, or held it before this holder
+            return found.seen_holds is None or found.seen_holds != holds
         return (
-            row is not None
-            and (row.state in ("unbound", "provisional") or row.boot != boot)
-            and row.name == found.name
+            row.state in ("unbound", "provisional")
             and found.seen_holds is not None
             and found.seen_holds != holds
         )

@@ -949,3 +949,45 @@ def test_a_session_adopts_a_live_lease_another_session_of_its_process_holds(worl
     assert world.bind(other).binding.state == "provisional"
     with pytest.raises(Refused, match="another session holds"):
         world.adopt(other, "n1")
+
+
+# The last review at e153df4 (GRO-50).
+
+
+def test_a_superseded_session_never_keeps_a_lease_in_force(world):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.bind(B)
+    world.adopt(B, "n1")  # B adopts the same claim: A is superseded, its process alive
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-b")
+    world.alive.discard(2002)  # B exits
+    found = world.bind(claude(3003, "s-c"))
+    assert found.binding.state == "current"
+
+
+def test_after_a_reboot_a_restored_fork_stays_out_once_the_name_is_held(world):
+    world.bind(A)  # generation 1
+    world.bind(claude(3003, "s-fork"), source="fork")  # unbound: never held the name
+    world.boot = "boot-after"
+    world.alive.clear()
+    assert world.bind(claude(1500, "s-a"), source="resume").binding.state == "current"
+    fork = world.bind(claude(3500, "s-fork"), source="resume")
+    assert fork.binding.state == "unbound"
+    assert fork.superseded == ()
+    assert world.resolve(claude(1500, "s-a")).state == "current"
+
+
+def test_a_session_kept_out_gives_up_the_lease_another_adopted(world):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.bind(A, launch=RENAMED, source="resume")  # G2 unbinds A, which keeps n1
+    world.bind(B)
+    world.adopt(B, "n1")  # B holds the name and the lease
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-b")
+    kept_out = world.bind(A, source="resume")
+    assert (kept_out.binding.state, kept_out.binding.nonce) == ("unbound", None)
+    cleared = world.bind(claude(1001, "s-a2"), source="clear")
+    assert cleared.binding.state == "provisional"
+    assert world.resolve(B).state == "current"
