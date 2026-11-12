@@ -418,7 +418,8 @@ GRO-50):
   then dies, a session it kept out can come back only through `adopt` or a
   fresh session. For an undeclared name, which has no lease, that means a
   fresh session. The same dead end already held within one boot for a
-  session kept out.
+  session kept out. The lead accepted it as KTD4's rule, "only adoption or a
+  fresh start" (GRO-50 lead note, 2026-11-12).
 - **Every `seen_generation` above**, in "the pieces", the re-decide rule and
   "How held since is decided", now means `seen_holds`, as the replacement
   list says.
