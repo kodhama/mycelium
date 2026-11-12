@@ -858,3 +858,67 @@ def test_a_session_decided_under_a_new_name_is_bound_from_then(world):
     world.claim(name="ogham-lead", nonce="n1", expires="2020-01-01T00:00:00.000Z")
     again = world.bind(claude(1500, "s-a"), launch="ogham-lead", source="resume").binding
     assert (again.state, again.bound_at) == ("current", renamed.bound_at)
+
+
+# Floor re-review at 9814746 (GRO-50).
+
+NO_NAME = Launch(None, "no launch name", {}, "none")
+
+
+@pytest.mark.parametrize("claim_state", ["pending", "live"])
+def test_a_session_keeps_its_lease_through_a_start_with_no_launch_name(world, claim_state):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    if claim_state == "live":
+        world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    world.bind(A, launch=RENAMED, source="resume")  # G2 unbinds it
+    world.bind(A, launch=NO_NAME, source="compact")  # still no agreed name
+    again = world.bind(A, source="resume")
+    assert (again.binding.state, again.binding.nonce) == ("current", "n1")
+
+
+def test_a_holder_that_keeps_its_generation_still_keeps_a_session_out(world):
+    world.bind(B)  # generation 1
+    world.bind(B, launch=RENAMED, source="resume")  # B unbound by G2
+    world.claim(nonce="n1")
+    assert world.bind(A).binding.state == "provisional"
+    with pytest.raises(Refused, match="nonce does not match"):
+        world.adopt(A, "n9")  # A leaves the name's holders
+    world.claim(nonce="n1", expires="2020-01-01T00:00:00.000Z")
+    back = world.bind(B, source="resume")  # B holds the name again, at generation 1
+    assert (back.binding.state, back.binding.generation) == ("current", 1)
+    again = world.bind(A, source="resume")
+    assert again.binding.state == "unbound"
+    assert "another session held ogham-worker since" in again.binding.reason
+    assert world.resolve(B).state == "current"
+
+
+# ce-doc-review at 17e551a (GRO-50).
+
+
+@pytest.mark.parametrize("first", ["Y", "X"])
+def test_after_a_reboot_the_first_restored_holder_keeps_the_others_out(world, first):
+    world.bind(A)  # X: generation 1
+    world.bind(B)  # Y supersedes X: generation 2
+    world.boot = "boot-after"
+    world.alive.clear()
+    x, y = claude(1500, "s-a"), claude(2500, "s-b")
+    order = [y, x] if first == "Y" else [x, y]
+    held = world.bind(order[0], source="resume")
+    assert held.binding.state == "current"
+    late = world.bind(order[1], source="resume")
+    assert late.binding.state == "unbound"
+    assert "another session held ogham-worker since" in late.binding.reason
+    assert late.superseded == ()
+    assert world.resolve(order[0]).state == "current"
+
+
+def test_a_running_lease_holder_unbound_by_g2_keeps_the_lease_in_force(world):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    world.bind(A, launch=RENAMED, source="resume")  # G2: A still runs, unbound
+    found = world.bind(B)  # a hand-started session
+    assert found.binding.state == "provisional"

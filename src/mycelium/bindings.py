@@ -74,7 +74,7 @@ _SCHEMA = (
         nonce TEXT,
         bound_at REAL NOT NULL,
         last_seen REAL NOT NULL,
-        seen_generation INTEGER,
+        seen_holds INTEGER,
         bound_seen REAL,
         PRIMARY KEY (harness, session_id)
     )""",
@@ -82,12 +82,13 @@ _SCHEMA = (
     """CREATE TABLE IF NOT EXISTS generations (
         name TEXT PRIMARY KEY,
         generation INTEGER NOT NULL,
+        holds INTEGER NOT NULL DEFAULT 0,
         held_boot TEXT
     )""",
 )
 _FIELDS = (
     "harness, session_id, name, declared, pid, evidence, boot, generation,"
-    " state, reason, nonce, bound_at, last_seen, seen_generation, bound_seen"
+    " state, reason, nonce, bound_at, last_seen, seen_holds, bound_seen"
 )
 
 
@@ -120,10 +121,11 @@ class Binding:
     """The lease nonce it adopted, or inherited in its own process."""
     bound_at: float
     last_seen: float
-    seen_generation: int | None = None
-    """The name's generation when the binding last held it (its own generation) or
-    went provisional for it; None if neither. Nobody else has held the name since
-    while the name's generation still equals it (lead ruling, GRO-50)."""
+    seen_holds: int | None = None
+    """The name's hold count when the binding last held it or went provisional for
+    it; None if neither. Every binding that becomes current for the name raises
+    the count, even one that keeps its generation, so nobody else has held the
+    name since while the count still equals it (lead ruling, GRO-50)."""
     bound_seen: float | None = None
     """When the binding was last seen current; None if it never was. An undeclared
     name's 7-day clock runs from it, so a session that never holds the name, such
@@ -349,7 +351,6 @@ class Bindings:
             reason=None,
             nonce=nonce,
             generation=generation,
-            seen_generation=generation,
             last_seen=context.now,
         )
         return self._make_current(found, also=self._same_process(caller, context))
@@ -466,10 +467,10 @@ class Bindings:
             generation=row.generation if same else None,
             state="unbound",
             reason=None,
-            nonce=None,
+            nonce=row.nonce if same else None,  # an unbound row keeps the lease it adopted
             bound_at=context.now if renamed else row.bound_at,
             last_seen=context.now,
-            seen_generation=row.seen_generation if same else None,
+            seen_holds=row.seen_holds if same else None,
             bound_seen=row.bound_seen if same else None,
         )
         if name is None:
@@ -493,19 +494,22 @@ class Bindings:
         caller: Caller,
         context: Context,
     ) -> Binding:
-        counter, held_boot = self._generation_held(found.name)
-        if held_boot == context.boot and self._held_since(row, found, counter):
+        counter, holds, held_boot = self._name_state(found.name)
+        if held_boot == context.boot and self._held_since(row, found, holds, context.boot):
             return replace(found, reason=HELD_SINCE.format(name=found.name))
+        found = replace(found, nonce=None)  # decided afresh below, from the lease
         others = self._rivals(found)
         claim = context.claim(found.name)
         # The row itself counts: a session decided again keeps the lease it adopted.
         mine = [] if row is None or row.boot != context.boot else [replace(row, pid=caller.pid)]
+        # Any running session of the name can hold the lease, an unbound one included.
+        named = [other for other in self._named(found.name) if other.key != found.key]
 
         def runs(claimed: lease.Claim) -> bool:
             return any(
                 liveness(other, context) != "dead"
                 and (other.session_id == claimed.session or other.nonce == claimed.nonce)
-                for other in [*others, *mine]
+                for other in [*named, *mine]
             )
 
         if lease.in_force(claim, context.boot, context.now, runs):
@@ -515,7 +519,7 @@ class Bindings:
             )
             if heir is None:
                 reason = f"a lease holds {found.name}: adopt its nonce to become current"
-                return replace(found, state="provisional", reason=reason, seen_generation=counter)
+                return replace(found, state="provisional", reason=reason, seen_holds=holds)
             # A /clear or /resume in the process that holds the lease keeps the lease.
             found = replace(found, nonce=claim.nonce)
         else:
@@ -531,33 +535,36 @@ class Bindings:
         # taken a newer one (KTD4; lead ruling, GRO-50); otherwise it takes the next.
         keeps = found.generation is not None and found.generation == counter
         generation = found.generation if keeps else self._next_generation(found.name)
-        return replace(
-            found, state="current", reason=None, generation=generation, seen_generation=generation
-        )
+        return replace(found, state="current", reason=None, generation=generation)
 
     @staticmethod
-    def _held_since(row: Binding | None, found: Binding, counter: int) -> bool:
+    def _held_since(row: Binding | None, found: Binding, holds: int, boot: str) -> bool:
         """Whether another binding became current for the name after this unbound or
         provisional session last held it or went provisional for it (lead ruling,
         GRO-50; KTD4). Such a session stays out until it adopts the lease or starts
         fresh: re-running its hook can't take the role back. The caller checks that
         the name was last held in this boot: an earlier boot's holder keeps nobody
         out, as a session that returns after a reboot starts fresh (lead overrule,
-        GRO-50)."""
+        GRO-50). A row from an earlier boot, in any state, stays out the same way
+        once a session of this boot has held the name: after a reboot the first
+        session restored holds the role (ce-doc-review, GRO-50)."""
         return (
             row is not None
-            and row.state in ("unbound", "provisional")
+            and (row.state in ("unbound", "provisional") or row.boot != boot)
             and row.name == found.name
-            and found.seen_generation is not None
-            and found.seen_generation != counter
+            and found.seen_holds is not None
+            and found.seen_holds != holds
         )
 
     def _make_current(self, found: Binding, also: Sequence[Binding] = ()) -> Bound:
+        """Write `found` as the name's holder: raise the hold count, record the boot."""
         rivals = self._rivals(found)
-        found = self._put(found)
+        holds = self._name_state(found.name)[1] + 1
         self._db.execute(
-            "UPDATE generations SET held_boot = ? WHERE name = ?", (found.boot, found.name)
+            "UPDATE generations SET holds = ?, held_boot = ? WHERE name = ?",
+            (holds, found.boot, found.name),
         )
+        found = self._put(replace(found, seen_holds=holds))
         return Bound(found, self._supersede([*rivals, *also], found))
 
     def _rivals(self, found: Binding) -> list[Binding]:
@@ -635,7 +642,7 @@ class Bindings:
             " generation = excluded.generation, state = excluded.state,"
             " reason = excluded.reason, nonce = excluded.nonce,"
             " bound_at = excluded.bound_at, last_seen = excluded.last_seen,"
-            " seen_generation = excluded.seen_generation, bound_seen = excluded.bound_seen",
+            " seen_holds = excluded.seen_holds, bound_seen = excluded.bound_seen",
             (
                 row.harness,
                 row.session_id,
@@ -650,21 +657,21 @@ class Bindings:
                 row.nonce,
                 row.bound_at,
                 row.last_seen,
-                row.seen_generation,
+                row.seen_holds,
                 row.bound_seen,
             ),
         )
         return row
 
     def _generation(self, name: str) -> int:
-        return self._generation_held(name)[0]
+        return self._name_state(name)[0]
 
-    def _generation_held(self, name: str) -> tuple[int, str | None]:
-        """The name's generation, and the boot a binding last held it current in."""
+    def _name_state(self, name: str) -> tuple[int, int, str | None]:
+        """The name's generation, its hold count, and the boot a binding last held it in."""
         found = self._db.execute(
-            "SELECT generation, held_boot FROM generations WHERE name = ?", (name,)
+            "SELECT generation, holds, held_boot FROM generations WHERE name = ?", (name,)
         ).fetchone()
-        return (0, None) if found is None else (found[0], found[1])
+        return (0, 0, None) if found is None else (found[0], found[1], found[2])
 
     def _next_generation(self, name: str) -> int:
         generation = self._generation(name) + 1
