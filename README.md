@@ -104,8 +104,8 @@ an argument.** It climbs from its own process to the nearest harness.
   same.
 - **Nesting can be unknown.** A Codex TUI caller, even one under a Claude
   session, and a caller found by thread id alone with no Claude variable
-  beside it come back with nesting unknown, never "not nested". Such a caller can bind, but never supersedes
-  a binding the walk verified.
+  beside it come back with nesting unknown, never "not nested". Such a
+  caller can bind, but never supersedes a live binding the walk verified.
 - **A Codex TUI is recognised by its shared daemon's path, on macOS.** That
   Codex starts the daemon by its path is not yet confirmed on a live Codex
   (plan U11 checks it). Linux `ps` shows no path, so there it is never
@@ -144,20 +144,28 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   inside another one, stays unbound unless it adopts the nonce.
 - **A resume or compaction keeps the session's binding**, even in a new
   process, as when herdr restores a pane: a current session stays current
-  with its generation and lease, and a superseded one stays superseded.
+  with its generation and lease, and a superseded one stays superseded. Two
+  exceptions: a current session whose launch names now disagree is unbound,
+  and a `/resume` back to a session its own process left makes it current
+  again at a new generation.
 - **A session unbound or provisional is decided again at its next
   SessionStart** (the lead's ruling on GRO-50, after KTD4). Under the same
   name, it keeps its generation if nobody else has held the name since, and
   a provisional one that never held it takes the name's next. If another
   session has held the name since, it stays unbound: re-running its hook
   can't take the role back, and only `mycelium adopt <nonce>` or a fresh
-  session can. Only a holder from the current boot keeps it out: after a
-  reboot, a session that returns is a fresh start at the name's next
-  generation. Under a new herdr name it binds fresh, at that name's next
+  session can. Under a new herdr name it binds fresh, at that name's next
   generation.
-- **A SessionStart with no launch name keeps the session's old name**, as
-  unbound. The directory shows it as `"state": "unbound"`, and it never makes
-  the name live.
+- **After a reboot, the first session to bind a name holds it.** Every
+  binding from the earlier boot is decided again, whatever its state: a
+  session restored after a reboot is current, at the name's next generation
+  if another session held the name after it, or its own if not. Once a
+  session of the new boot holds the name, the others restored after it stay
+  out, as above.
+- **A session decided again with no launch name keeps its old name**, as
+  unbound. The directory shows it as `"state": "unbound"` unless a current
+  binding under the name is shown first, and it never makes the name live or
+  keeps the name from going.
 - **After a reboot every binding is dead**, so the role reads as absent until
   its session binds again.
 - **A name declared in no cluster still binds**, as undeclared.
@@ -183,6 +191,9 @@ compares it with `KODHAMA_AGENT`.
 expired one, or a live one another session holds), 2 for a usage error, and
 3 as above, or when the index or the cluster helper can't be read.
 
+A caller the walk can't resolve, or any caller before the bindings file
+exists, gets exit 1 from `whoami` and `adopt` before anything else is read.
+
 Right after an in-place `/clear`, `whoami` exits 1 until the clear's
 SessionStart hook has bound the new session id, then 0 with the next
 generation.
@@ -190,9 +201,10 @@ generation.
 **`mycelium directory` prints who is reachable**, as JSON:
 `{"names": [{"name", "declared", "deliverability", "harness", "generation",
 "state", "last_seen", "knock": {"can", "how"}}]}`. `state` is the shown
-binding's: `current`, `provisional`, `superseded` or `unbound`. Deliverability is `live`, `absent`,
-`queue-only`, `held` or `gone`, computed from the clusters and the bindings
-each time. A name can be knocked only while live.
+binding's stored state, `current`, `provisional`, `superseded` or `unbound`,
+not its liveness: a dead current binding reads `current` beside `absent`.
+Deliverability is `live`, `absent`, `queue-only`, `held` or `gone`, computed
+from the clusters and the bindings each time. A name can be knocked only while live.
 
 - **A name declared in no cluster is live only with a live current
   binding**; a provisional one doesn't count.

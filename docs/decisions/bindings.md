@@ -12,7 +12,7 @@ ticket: GRO-50
 and the directory says who is reachable.** This follows hub plan unit U4, its
 U4b half, with R5, R36, R37 and KTD3-KTD6
 (`areas/agent-comms/plans/2026-10-27-feat-mycelium-plan.md` at `c7b1b80`,
-which records the U4b rulings), the lead's rulings on GRO-50, and grove's lease
+which records the U4b rulings; see the 2026-11-12 entry for `06c1feb`), the lead's rulings on GRO-50, and grove's lease
 (`skills/supervision-setup/scripts/lease.mjs` at `7d054e2`). It builds on the
 caller walk and the pane module ([caller identity](caller-identity.md)).
 
@@ -305,26 +305,33 @@ every name a binding carries. Each row holds `name`, `declared`,
 replaces the last sentence of "How held since is decided" above. **Only a
 holder from the current boot keeps a session out.** After a reboot, a session
 that returns, such as a pane herdr restores, is a new process and a fresh
-start under KTD4. So it takes the name's next generation, as U4's reboot
-scenarios have it. Otherwise a name whose earlier holder never came back
+start under KTD4. When another session held the name after it, it takes the
+name's next generation. When nobody did, it keeps its own, as U4's restored
+pane does (a resume re-confirms its generation). Otherwise a name whose earlier holder never came back
 would have no possible holder, and the role would sit absent until someone
 started it by hand. Within one boot the rule stays as it was.
 
 - **How:** the `generations` table records `held_boot`, the boot in which a
-  binding last became current for the name. A binding that keeps its
-  generation across a reboot updates it too. A session stays out only when
-  the counter moved past its `seen_generation` and `held_boot` is the current
-  boot.
+  binding last became current for the name, and `holds`, a count every
+  binding that becomes current raises, even one that keeps its generation.
+  Each row's `seen_holds` replaces `seen_generation`: the name's count when
+  the row last held the name or went provisional for it. A session stays out
+  only when the count moved past its `seen_holds` and `held_boot` is the
+  current boot. The generation alone missed a holder that keeps its
+  generation, such as a G2-unbound holder whose names agree again (floor
+  review, GRO-50).
 - **Pinned:**
   - X held the name, Y superseded X, then a reboot. Only X's pane comes back,
     and X becomes current at the next generation.
   - The same holds for a session that G2 left unbound while Y held the name.
   - A holder that binds in the new boot, fresh or restored, still keeps such
-    a session out.
+    a session out, and so does one that holds again at its old generation.
 
 **A SessionStart with no launch name keeps the row's old name, generation
 and `seen_generation`** (lead ruling (i), same note). The directory row now
-carries `state`, the shown binding's state, so that row reads `unbound`. It
+carries `state`, the shown binding's state, so that row reads `unbound` when
+it is the one shown. A current binding under the name, even a dead one from
+an earlier boot, is shown first. It
 never makes the name live or knockable, since only a live current binding
 does. **It never refreshes an undeclared name's 7-day clock either** (lead
 ruling, GRO-50, 2026-11-12). R37 counts the time the name is unbound, and a
@@ -333,15 +340,19 @@ undeclared bullet's "its latest binding was last seen 7 days ago" above.
 
 - **How:** each row records `bound_seen`, when it was last seen current, set
   whenever a current row is written, `touch` included. The clock runs from
-  the latest `bound_seen` among the name's bindings. A binding never current
-  counts from its `bound_at`, so a name nobody has held runs from when it was
-  first seen.
+  the latest `bound_seen` among the name's bindings. A binding never current,
+  such as a fork, never moves it. Only a name nobody has held runs its clock
+  from when it was first seen, the earliest `bound_at`.
+- **For U5:** the "later of that and `last_seen`" in the known limit above
+  should read "the later of that and `bound_seen`". With `last_seen`, a
+  session that never held the name would refresh the clock again.
 - **Mail isn't lost:** a name with unhandled mail stays queue-only.
 - **`last_seen` in the directory row** is still the latest sighting of any
   binding under the name.
 
-**A session decided again keeps the lease it adopted.** When `bind` decides a
-session again, the row's own nonce counts: both for whether its live claim
+**A session decided again keeps the lease it adopted.** An unbound row keeps
+its nonce, a SessionStart with no launch name included. When `bind` decides
+a session again, the row's own nonce counts: both for whether its live claim
 runs and for the heir that inherits the nonce. So a session that G2 unbound
 and whose names agree again returns current with its nonce, and a later
 `/clear` still inherits the lease.
@@ -359,3 +370,32 @@ process, whatever state it gets itself.** This is by design. One process runs
 one session, and a `/clear` or `/resume` ends the session the process ran
 before. So even an unbound or provisional result marks the process's earlier
 session superseded.
+
+**What the entries above replace, sentence by sentence** (ce-doc-review,
+GRO-50):
+
+- **The plan revision** is now `06c1feb`. It adds the R37 clock placement in
+  U5 and U8, and has U5's sweep prune binding rows (`b7e90b2`). U4b keeps
+  every row: nothing here deletes one.
+- **The reboot rule** replaces, besides the sentence named above, rule 2's
+  "returns only through `adopt` ... or a fresh start, a new session id" for
+  a session from an earlier boot. Here "fresh start" means what KTD4 means by
+  it for a new process, even under the same session id. **Every row from an
+  earlier boot is decided again, in any state**, superseded and stale
+  current rows included. It stays out once a session of this boot has held
+  the name, so after a reboot the first session to bind a name holds it.
+- **"Supersedes nothing"** in the binding decision (a provisional session
+  "supersedes nothing" while the lease holds; a superseded or held-out
+  session "supersedes nothing") means it supersedes no other session of the
+  name. The own-process entry above still applies to each of them.
+- **`touch` "changes nothing else"** now has one exception: it also sets
+  `bound_seen`, as every write of a current row does.
+- **"A lease exists"** counts any running session of the name whose session
+  or nonce the claim names, an unbound one included. A lease holder that G2
+  unbound still holds the lease, so a hand-started session stays
+  provisional.
+- **"So a Codex TUI can restart in place"** holds only with no lease in
+  force. **Known limit:** under a live claim, a pid-less predecessor reads
+  live (`unverified`), and its successor can't inherit or adopt the lease.
+  So the successor stays provisional until the predecessor is superseded.
+  Plan U11 settles pid-less liveness.
