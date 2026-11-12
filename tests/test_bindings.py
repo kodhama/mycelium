@@ -751,3 +751,110 @@ def test_a_suffixed_checkout_reads_its_claim_under_the_declared_name_at_its_home
     effective.write_text(json.dumps({**claim, "nonce": "n-effective"}))
 
     assert bindings.claim_reader(index)("ex-engine-lead-427").nonce == "n-declared"
+
+
+# The lead's overrule (ii) (GRO-50 lead note, 2026-11-10): the stay-out rule holds only
+# for a holder from the current boot; after a reboot, a returning session is a fresh start.
+
+
+def test_after_a_reboot_a_superseded_session_restored_alone_takes_the_next_generation(world):
+    world.bind(A)  # X: generation 1
+    world.bind(B)  # Y supersedes X: generation 2
+    world.boot = "boot-after"
+    world.alive.clear()
+    restored = world.bind(claude(1500, "s-a"), source="resume")  # only X's pane comes back
+    assert (restored.binding.state, restored.binding.generation) == ("current", 3)
+    assert [old.session_id for old in restored.superseded] == ["s-b"]
+
+
+def test_after_a_reboot_a_session_kept_out_by_an_earlier_boot_holder_takes_the_next_generation(
+    world,
+):
+    world.bind(A)  # generation 1
+    world.bind(A, launch=RENAMED, source="resume")  # A unbound by G2
+    world.bind(B)  # generation 2: within this boot, A stays out
+    assert world.bind(A, source="resume").binding.state == "unbound"
+    world.boot = "boot-after"
+    world.alive.clear()
+    restored = world.bind(claude(1500, "s-a"), source="resume")
+    assert (restored.binding.state, restored.binding.generation) == ("current", 3)
+
+
+@pytest.mark.parametrize("holder", ["started after the reboot", "restored after the reboot"])
+def test_after_a_reboot_a_holder_of_the_current_boot_still_keeps_a_session_out(world, holder):
+    world.bind(A)  # generation 1
+    world.bind(A, launch=RENAMED, source="resume")  # A unbound by G2
+    if holder == "restored after the reboot":
+        world.bind(B)  # generation 2, before the reboot
+    world.boot = "boot-after"
+    world.alive.clear()
+    if holder == "started after the reboot":
+        held = world.bind(claude(3003, "s-c"))
+    else:
+        held = world.bind(claude(2500, "s-b"), source="resume")  # keeps generation 2
+    assert (held.binding.state, held.binding.generation) == ("current", 2)
+    back = world.bind(claude(1500, "s-a"), source="resume")
+    assert back.binding.state == "unbound"
+    assert "another session held ogham-worker since" in back.binding.reason
+    assert back.superseded == ()
+
+
+# A re-decided session keeps the lease nonce it adopted (floor re-review, GRO-50).
+
+
+@pytest.mark.parametrize("claim_state", ["pending", "live"])
+def test_a_session_decided_again_keeps_the_lease_it_adopted(world, claim_state):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    if claim_state == "live":
+        world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    world.bind(A, launch=RENAMED, source="resume")  # G2 unbinds it
+    again = world.bind(A, source="resume")  # its names agree again
+    assert (again.binding.state, again.binding.nonce) == ("current", "n1")
+    assert again.binding.generation == 1
+    cleared = world.bind(claude(1001, "s-a2"), source="clear")
+    assert (cleared.binding.state, cleared.binding.nonce) == ("current", "n1")
+
+
+# adopt (floor re-review, GRO-50).
+
+
+def test_adopting_supersedes_another_session_of_the_callers_own_process(world):
+    world.bind(A)  # ogham-worker
+    world.bind(claude(1001, "s-a2"), launch="ogham-lead", source="clear")
+    world.claim(nonce="n1")
+    adopted = world.adopt(A, "n1")  # a /resume back to s-a whose hook has not run yet
+    assert adopted.binding.state == "current"
+    assert [old.session_id for old in adopted.superseded] == ["s-a2"]
+    assert world.resolve(claude(1001, "s-a2")).state == "superseded"
+
+
+@pytest.mark.parametrize(
+    "over, why",
+    [
+        ({"boot": "boot-before"}, "earlier boot"),
+        ({"expires": "2020-01-01T00:00:00.000Z"}, "expired"),
+    ],
+)
+def test_a_claim_adopt_cannot_take_refuses_before_any_nonce_check(world, over, why):
+    world.claim(nonce="n1")
+    assert world.bind(A).binding.state == "provisional"
+    world.claim(nonce="n2", **over)
+    with pytest.raises(Refused, match=why):
+        world.adopt(A, "n1")
+    assert world.resolve(A).state == "provisional"
+
+
+# bound_at follows the name (floor re-review, GRO-50).
+
+
+def test_a_session_decided_under_a_new_name_is_bound_from_then(world):
+    first = world.bind(A).binding
+    world.claim(name="ogham-lead", nonce="n1")
+    renamed = world.bind(claude(1500, "s-a"), launch="ogham-lead").binding
+    assert renamed.name == "ogham-lead"
+    assert renamed.bound_at == world.now > first.bound_at
+    world.claim(name="ogham-lead", nonce="n1", expires="2020-01-01T00:00:00.000Z")
+    again = world.bind(claude(1500, "s-a"), launch="ogham-lead", source="resume").binding
+    assert (again.state, again.bound_at) == ("current", renamed.bound_at)
