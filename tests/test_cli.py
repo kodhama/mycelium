@@ -299,6 +299,7 @@ def test_directory_prints_every_name_as_json(machine, org, capsys):
             "deliverability",
             "harness",
             "generation",
+            "state",
             "last_seen",
             "knock",
         }

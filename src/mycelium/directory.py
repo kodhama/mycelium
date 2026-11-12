@@ -42,6 +42,9 @@ class Row:
     deliverability: str
     harness: str | None
     generation: int | None
+    state: str | None
+    """The shown binding's state: a binding with no launch name keeps its old
+    name, and reads `unbound` here (lead ruling, GRO-50)."""
     last_seen: str | None
     knock: dict[str, Any]
 
@@ -52,6 +55,7 @@ class Row:
             "deliverability": self.deliverability,
             "harness": self.harness,
             "generation": self.generation,
+            "state": self.state,
             "last_seen": self.last_seen,
             "knock": dict(self.knock),
         }
@@ -80,24 +84,23 @@ def rows(
 def unhandled_in(store_path: Path) -> Iterator[Unhandled]:
     """Whether a name's mailbox holds unhandled mail, read from the message store.
 
-    The store opens once, through `open_store` and its rules (a symlink or a
-    newer schema is refused: StoreRefused), at the first question, and closes
-    with the context. With no store file yet, nothing is unhandled and nothing
-    is created (KTD13)."""
-    opened: list[Store] = []
+    At the first question it looks for the store once: it opens it through
+    `open_store` and its rules (a symlink or a newer schema is refused:
+    StoreRefused), and closes it with the context. With no store file then,
+    nothing is unhandled for the whole listing, and nothing is created (KTD13)."""
+    found: dict[str, Store | None] = {}
 
     def unhandled(name: str) -> bool:
-        if not opened:
-            if not os.path.lexists(store_path):
-                return False
-            opened.append(open_store(store_path))
-        return opened[0].has_unhandled(name)
+        if "store" not in found:
+            found["store"] = open_store(store_path) if os.path.lexists(store_path) else None
+        store = found["store"]
+        return store is not None and store.has_unhandled(name)
 
     try:
         yield unhandled
     finally:
-        for store in opened:
-            store.close()
+        if found.get("store") is not None:
+            found["store"].close()
 
 
 def _row(
@@ -118,6 +121,7 @@ def _row(
         deliverability=deliverability,
         harness=shown.harness if shown else None,
         generation=shown.generation if shown else None,
+        state=shown.state if shown else None,
         last_seen=iso(max(b.last_seen for b in bound)) if bound else None,
         knock={"can": can, "how": KNOCK.get(shown.harness) if can and shown else None},
     )

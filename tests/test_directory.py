@@ -184,6 +184,7 @@ def test_a_row_reads_as_json_in_the_documented_shape(world):
         "deliverability": "live",
         "harness": "claude",
         "generation": 1,
+        "state": "current",
         "last_seen": "2027-01-15T08:00:01Z",
         "knock": {"can": True, "how": "sendmessage-hint"},
     }
@@ -262,3 +263,37 @@ def test_the_message_store_is_opened_once_per_directory(world, tmp_path, monkeyp
         }
     assert rows["probe-a"].deliverability == rows["probe-b"].deliverability == "gone"
     assert opened == [path]
+
+
+# The lead's ruling (i) (GRO-50 lead note, 2026-11-10): a SessionStart with no launch
+# name keeps the row's old name, and the directory shows that row as unbound.
+
+NO_NAME = Launch(None, "no launch name", {}, "none")
+RENAMED = Launch(None, "launch names disagree", {"pane": "w-parked"}, "named")
+
+
+@pytest.mark.parametrize("name", ["w-running", "scratch-probe"])
+def test_a_no_name_row_shows_as_unbound_and_never_makes_its_name_live(world, name):
+    probe = claude(1001, "s-1")
+    world.bind(probe, launch=name)
+    world.bind(probe, launch=RENAMED, source="resume")  # G2 unbinds it
+    kept = world.bind(probe, launch=NO_NAME, source="resume").binding
+    assert (kept.name, kept.state, kept.generation) == (name, "unbound", 1)
+    row = table(world)[name]
+    assert row.state == "unbound"
+    assert row.deliverability == ("absent" if name == "w-running" else "queue-only")
+    assert row.knock == {"can": False, "how": None}
+
+
+def test_a_name_with_no_binding_shows_no_state(world):
+    assert table(world)["w-running"].state is None
+
+
+def test_the_message_store_is_looked_for_once_per_directory(tmp_path):
+    path = tmp_path / "data" / "store.sqlite3"
+    with directory.unhandled_in(path) as found:
+        assert found("probe-a") is False
+        store = open_store(path)  # the store appears in the middle of the listing
+        store.append("probe-b", "hello")
+        store.close()
+        assert found("probe-b") is False  # the listing decided at its first question
