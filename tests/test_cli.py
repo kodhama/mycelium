@@ -13,6 +13,7 @@ from mycelium import paths as mycelium_paths
 from mycelium.cli import main
 from mycelium.index import refresh
 from mycelium.launch import Launch
+from mycelium.store import StoreRefused
 
 
 def test_version_flag_prints_the_installed_version(capsys):
@@ -353,3 +354,24 @@ def test_adopt_with_an_unreadable_state_folder_exits_3(machine, capsys):
     code, out, err = run(capsys, "adopt", "n1")
     assert (code, out) == (3, "")
     assert "not a folder" in err
+
+
+def test_directory_with_an_unreadable_message_store_exits_3(machine, org, capsys, monkeypatch):
+    from contextlib import contextmanager
+
+    from mycelium import directory
+
+    @contextmanager
+    def refused(path):
+        def unhandled(name):
+            raise StoreRefused("the store is a symlink")
+
+        yield unhandled
+
+    machine.bind("s-2", name="scratch-probe", pid=5555)  # not running: queue-only or gone
+    monkeypatch.setattr(directory, "unhandled_in", refused)
+    monkeypatch.setattr(directory, "UNDECLARED_GONE_SECONDS", -(10**10))  # ask the store
+    code, out, err = run(capsys, "directory")
+    assert (code, out) == (3, "")
+    assert "message store" in err
+    assert "Traceback" not in err

@@ -922,3 +922,30 @@ def test_a_running_lease_holder_unbound_by_g2_keeps_the_lease_in_force(world):
     world.bind(A, launch=RENAMED, source="resume")  # G2: A still runs, unbound
     found = world.bind(B)  # a hand-started session
     assert found.binding.state == "provisional"
+
+
+# ce-code-review of the whole branch at 9814746 (GRO-50).
+
+
+def test_a_clear_after_a_g2_unbind_keeps_the_running_lease(world):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    world.bind(A, launch=RENAMED, source="resume")  # G2 unbinds it
+    cleared = world.bind(claude(1001, "s-a2"), source="clear")
+    assert (cleared.binding.state, cleared.binding.nonce) == ("current", "n1")
+
+
+def test_a_session_adopts_a_live_lease_another_session_of_its_process_holds(world):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    world.bind(claude(1001, "s-a2"), source="clear")
+    adopted = world.adopt(claude(1001, "s-a2"), "n1")
+    assert (adopted.binding.state, adopted.binding.nonce) == ("current", "n1")
+    other = claude(3003, "s-c")  # a session of another process
+    assert world.bind(other).binding.state == "provisional"
+    with pytest.raises(Refused, match="another session holds"):
+        world.adopt(other, "n1")
