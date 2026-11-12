@@ -991,3 +991,52 @@ def test_a_session_kept_out_gives_up_the_lease_another_adopted(world):
     cleared = world.bind(claude(1001, "s-a2"), source="clear")
     assert cleared.binding.state == "provisional"
     assert world.resolve(B).state == "current"
+
+
+# The last code round of this resume: the re-check of e153df4..71dad14 (GRO-50).
+
+
+def test_a_restored_fork_kept_out_stays_out_at_its_next_session_start(world):
+    world.bind(A)
+    world.bind(claude(3003, "s-fork"), source="fork")
+    world.boot = "boot-after"
+    world.alive.clear()
+    world.bind(claude(1500, "s-a"), source="resume")
+    fork = claude(3500, "s-fork")
+    assert world.bind(fork, source="resume").binding.state == "unbound"
+    again = world.bind(fork, source="compact")
+    assert (again.binding.state, again.superseded) == ("unbound", ())
+    assert world.resolve(claude(1500, "s-a")).state == "current"
+
+
+def test_a_session_kept_out_still_binds_fresh_under_a_new_herdr_name(world):
+    world.bind(A)
+    world.bind(A, launch=RENAMED, source="resume")
+    world.bind(B)
+    assert world.bind(A, source="resume").binding.state == "unbound"  # kept out
+    moved = world.bind(A, launch="ogham-lead", source="resume")
+    assert (moved.binding.name, moved.binding.state) == ("ogham-lead", "current")
+
+
+def test_a_clear_never_inherits_a_lease_another_session_adopted_since(world):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.bind(A, launch=RENAMED, source="resume")  # G2: A unbound, keeps n1
+    world.bind(B)
+    world.adopt(B, "n1")
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-b")
+    cleared = world.bind(claude(1001, "s-a2"), source="clear")  # A never re-ran its hook
+    assert cleared.binding.state == "provisional"
+    assert world.resolve(B).state == "current"
+
+
+def test_a_lease_holders_clear_with_no_launch_name_keeps_the_lease_in_force(world):
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    nameless = world.bind(claude(1001, "s-a2"), launch=NO_NAME, source="clear")
+    assert nameless.binding.state == "unbound"
+    outsider = world.bind(B)
+    assert outsider.binding.state == "provisional"
