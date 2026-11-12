@@ -12,7 +12,8 @@ ticket: GRO-50
 and the directory says who is reachable.** This follows hub plan unit U4, its
 U4b half, with R5, R36, R37 and KTD3-KTD6
 (`areas/agent-comms/plans/2026-10-27-feat-mycelium-plan.md` at `c7b1b80`,
-which records the U4b rulings; see the 2026-11-12 entry for `06c1feb`), the lead's rulings on GRO-50, and grove's lease
+which records the U4b rulings; the 2026-11-12 entry moves it to `23d0776`),
+the lead's rulings on GRO-50, and grove's lease
 (`skills/supervision-setup/scripts/lease.mjs` at `7d054e2`). It builds on the
 caller walk and the pane module ([caller identity](caller-identity.md)).
 
@@ -344,8 +345,9 @@ undeclared bullet's "its latest binding was last seen 7 days ago" above.
   such as a fork, never moves it. Only a name nobody has held runs its clock
   from when it was first seen, the earliest `bound_at`.
 - **For U5:** the "later of that and `last_seen`" in the known limit above
-  should read "the later of that and `bound_seen`". With `last_seen`, a
-  session that never held the name would refresh the clock again.
+  now reads "the later of the death and `bound_seen`", as the plan has it at
+  `23d0776`. With `last_seen`, a session that never held the name would
+  refresh the clock again.
 - **Mail isn't lost:** a name with unhandled mail stays queue-only.
 - **`last_seen` in the directory row** is still the latest sighting of any
   binding under the name.
@@ -374,16 +376,18 @@ session superseded.
 **What the entries above replace, sentence by sentence** (ce-doc-review,
 GRO-50):
 
-- **The plan revision** is now `06c1feb`. It adds the R37 clock placement in
-  U5 and U8, and has U5's sweep prune binding rows (`b7e90b2`). U4b keeps
-  every row: nothing here deletes one.
+- **The plan revision** is now `23d0776`. Since `c7b1b80` the plan places
+  the R37 clock in U5 and U8 (`06c1feb`), has U5's sweep prune binding rows
+  (`b7e90b2`), and times U5's gone clock from `bound_seen` (`23d0776`). U4b
+  keeps every row: nothing here deletes one.
 - **The reboot rule** replaces, besides the sentence named above, rule 2's
   "returns only through `adopt` ... or a fresh start, a new session id" for
   a session from an earlier boot. Here "fresh start" means what KTD4 means by
   it for a new process, even under the same session id. **Every row from an
   earlier boot is decided again, in any state**, superseded and stale
   current rows included. It stays out once a session of this boot has held
-  the name, so after a reboot the first session to bind a name holds it.
+  the name, so after a reboot the first session to bind a name holds it (the
+  lead confirmed this, GRO-50 lead note, 2026-11-12).
 - **"Supersedes nothing"** in the binding decision (a provisional session
   "supersedes nothing" while the lease holds; a superseded or held-out
   session "supersedes nothing") means it supersedes no other session of the
