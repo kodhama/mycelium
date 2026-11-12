@@ -437,11 +437,6 @@ to `71dad14`, GRO-50):
   `/resume` inherits a nonce only from a session of its process whose
   `seen_holds` equals the name's count. A session another one took the name
   from, and its process, inherit nothing.
-- **A superseded session whose process runs on** in another session, such as
-  a lease holder's `/clear` that has no launch name yet (lessons C2), still
-  keeps the lease in force. One process runs one session, so the process
-  still holds the lease. This qualifies "a superseded session never keeps a
-  lease in force" above.
 - **The returning paths, corrected:** a session kept out after a reboot
   returns only as a fresh session, or by `adopt` on a lease grove offers it.
   `adopt` refuses a live claim that names another session, so "only through
@@ -450,3 +445,23 @@ to `71dad14`, GRO-50):
   live claim still names keeps the lease in force through the claim's
   session. Other sessions go provisional, and only that session can adopt
   the nonce. The lease is that session's.
+
+**Known limits of the lease rules, left to a follow-up story** (re-check of
+`71dad14` to `c041060`, GRO-50; the lead ruled to record them, not fix them
+here). A third fix in that round, which let a superseded session's running
+process keep the lease in force, was reverted: it let a stale nonce lock a
+name with no possible holder.
+
+- **F3:** a lease holder's `/clear` that has no launch name yet (lessons C2)
+  supersedes the holder, and a superseded session keeps no lease in force.
+  So an outside session can bind current until the successor's name appears.
+- **G1:** a kept-out session can take the name back by moving to another
+  herdr name and back. Moving resets its `seen_holds`.
+- **G2:** a kept-out session seen in a new pid with source `startup` is
+  decided again and can take the name. That is unlikely for Claude, and U11
+  maps Codex's sources.
+- **G3:** a lease holder's successor that has no nonce, resumed in a new pid
+  after the holder's process ends, no longer keeps the lease in force.
+- **G4:** a G2-unbound session's stale nonce keeps a lease in force after
+  another session adopted that nonce and died, while the unbound session
+  hasn't re-run its hook.

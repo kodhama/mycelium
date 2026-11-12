@@ -162,10 +162,11 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   Otherwise a session restored after a reboot is current, at the name's next
   generation if another session held the name after it, or its own if not.
   Once a session of the new boot holds the name, the others restored after
-  it stay out, as above, a fork included, at every SessionStart of that
-  boot. They stay out even if that holder then dies: they return only as a
-  fresh session, or by `mycelium adopt <nonce>` on a lease grove offers
-  them, which a live claim naming another session never is.
+  it stay out, as above, a fork included, for the rest of the boot (the
+  record lists the known gaps). They stay out even if that holder then
+  dies: they return only as a fresh session, or by `mycelium adopt <nonce>`
+  on a lease they can take: a pending claim, or a live one naming them or
+  another session of their own process.
 - **A session decided again with no launch name keeps its old name**, as
   unbound. The directory shows it as `"state": "unbound"` unless a current
   binding under the name is shown first, and it never makes the name live or
