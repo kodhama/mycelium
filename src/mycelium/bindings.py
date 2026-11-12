@@ -75,6 +75,7 @@ _SCHEMA = (
         bound_at REAL NOT NULL,
         last_seen REAL NOT NULL,
         seen_generation INTEGER,
+        bound_seen REAL,
         PRIMARY KEY (harness, session_id)
     )""",
     "CREATE INDEX IF NOT EXISTS bindings_by_name ON bindings (name)",
@@ -86,7 +87,7 @@ _SCHEMA = (
 )
 _FIELDS = (
     "harness, session_id, name, declared, pid, evidence, boot, generation,"
-    " state, reason, nonce, bound_at, last_seen, seen_generation"
+    " state, reason, nonce, bound_at, last_seen, seen_generation, bound_seen"
 )
 
 
@@ -123,6 +124,10 @@ class Binding:
     """The name's generation when the binding last held it (its own generation) or
     went provisional for it; None if neither. Nobody else has held the name since
     while the name's generation still equals it (lead ruling, GRO-50)."""
+    bound_seen: float | None = None
+    """When the binding was last seen current; None if it never was. An undeclared
+    name's 7-day clock runs from it, so a session that never holds the name, such
+    as one with no launch name, never refreshes the clock (lead ruling, GRO-50)."""
 
     @property
     def key(self) -> tuple[str, str]:
@@ -336,9 +341,7 @@ class Bindings:
         if claim.state == "live" and not self._holds_session(claim, row):
             raise Refused("another session holds the live lease")
         if row.state == "current" and row.nonce == nonce:
-            seen = replace(row, last_seen=context.now)
-            self._put(seen)
-            return Bound(seen)
+            return Bound(self._put(replace(row, last_seen=context.now)))
         generation = self._next_generation(row.name)
         found = replace(
             row,
@@ -378,8 +381,7 @@ class Bindings:
             found = self.resolve_caller(caller, context)
             if found.binding is None:
                 return found
-            seen = replace(found.binding, last_seen=context.now)
-            self._put(seen)
+            seen = self._put(replace(found.binding, last_seen=context.now))
         return Resolution(found.state, seen, found.reason)
 
     def authorize(self, caller: Caller, context: Context) -> Binding:
@@ -425,7 +427,7 @@ class Bindings:
             evidence=caller.source,
             last_seen=context.now,
         )
-        self._put(found)
+        found = self._put(found)
         return Bound(found, self._supersede(self._same_process(caller, context), found))
 
     def _held_in_process(self, row: Binding, caller: Caller, context: Context) -> bool:
@@ -468,6 +470,7 @@ class Bindings:
             bound_at=context.now if renamed else row.bound_at,
             last_seen=context.now,
             seen_generation=row.seen_generation if same else None,
+            bound_seen=row.bound_seen if same else None,
         )
         if name is None:
             found = replace(found, reason=event.launch.reason)
@@ -479,7 +482,7 @@ class Bindings:
             found = self._for_name(found, row, own, caller, context)
         if found.state == "current":
             return self._make_current(found, also=own)
-        self._put(found)
+        found = self._put(found)
         return Bound(found, self._supersede(own, found))
 
     def _for_name(
@@ -551,7 +554,7 @@ class Bindings:
 
     def _make_current(self, found: Binding, also: Sequence[Binding] = ()) -> Bound:
         rivals = self._rivals(found)
-        self._put(found)
+        found = self._put(found)
         self._db.execute(
             "UPDATE generations SET held_boot = ? WHERE name = ?", (found.boot, found.name)
         )
@@ -620,16 +623,19 @@ class Bindings:
         )
         return [_binding(row) for row in found]
 
-    def _put(self, row: Binding) -> None:
+    def _put(self, row: Binding) -> Binding:
+        """Write the row, and return it as written: a current row is seen bound now."""
+        if row.state == "current":
+            row = replace(row, bound_seen=row.last_seen)
         self._db.execute(
-            f"INSERT INTO bindings ({_FIELDS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            f"INSERT INTO bindings ({_FIELDS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (harness, session_id) DO UPDATE SET"
             " name = excluded.name, declared = excluded.declared, pid = excluded.pid,"
             " evidence = excluded.evidence, boot = excluded.boot,"
             " generation = excluded.generation, state = excluded.state,"
             " reason = excluded.reason, nonce = excluded.nonce,"
             " bound_at = excluded.bound_at, last_seen = excluded.last_seen,"
-            " seen_generation = excluded.seen_generation",
+            " seen_generation = excluded.seen_generation, bound_seen = excluded.bound_seen",
             (
                 row.harness,
                 row.session_id,
@@ -645,8 +651,10 @@ class Bindings:
                 row.bound_at,
                 row.last_seen,
                 row.seen_generation,
+                row.bound_seen,
             ),
         )
+        return row
 
     def _generation(self, name: str) -> int:
         return self._generation_held(name)[0]

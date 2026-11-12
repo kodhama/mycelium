@@ -326,10 +326,19 @@ started it by hand. Within one boot the rule stays as it was.
 and `seen_generation`** (lead ruling (i), same note). The directory row now
 carries `state`, the shown binding's state, so that row reads `unbound`. It
 never makes the name live or knockable, since only a live current binding
-does. **Its `last_seen` still counts toward an undeclared name's 7-day
-clock**, because the directory's clock reads every binding under the name.
-An undeclared name stays queue-only, never gone, while such a session keeps
-starting under it. That keeps mail rather than dropping it.
+does. **It never refreshes an undeclared name's 7-day clock either** (lead
+ruling, GRO-50, 2026-11-12). R37 counts the time the name is unbound, and a
+session with no launch name never holds the name. This replaces the
+undeclared bullet's "its latest binding was last seen 7 days ago" above.
+
+- **How:** each row records `bound_seen`, when it was last seen current, set
+  whenever a current row is written, `touch` included. The clock runs from
+  the latest `bound_seen` among the name's bindings. A binding never current
+  counts from its `bound_at`, so a name nobody has held runs from when it was
+  first seen.
+- **Mail isn't lost:** a name with unhandled mail stays queue-only.
+- **`last_seen` in the directory row** is still the latest sighting of any
+  binding under the name.
 
 **A session decided again keeps the lease it adopted.** When `bind` decides a
 session again, the row's own nonce counts: both for whether its live claim

@@ -146,14 +146,19 @@ def _deliverability(
     hold = index.hold(name)
     if hold is not None:
         return "gone" if hold.ended(context.now) else "held"
-    # Undeclared (R37): unbound since its last binding was last seen.
+    # Undeclared (R37): unbound since a binding was last seen holding the name, or,
+    # for a name never held, since it was first seen (lead ruling, GRO-50).
     if live:
         return "live"
-    last = max((b.last_seen for b in bound), default=None)
+    last = max((_held_until(b) for b in bound), default=None)
     if last is not None and context.now - last >= UNDECLARED_GONE_SECONDS:
         if not unhandled(name):
             return "gone"
     return "queue-only"
+
+
+def _held_until(binding: Binding) -> float:
+    return binding.bound_at if binding.bound_seen is None else binding.bound_seen
 
 
 def _latest(bound: Iterable[Binding]) -> Binding | None:

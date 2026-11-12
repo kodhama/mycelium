@@ -614,7 +614,7 @@ def test_touch_refreshes_last_seen_and_changes_nothing_else(world):
     touched = world.store.touch(A, world.context())
     assert touched.state == "current"
     (row,) = world.store.rows()
-    assert row == replace(first, last_seen=world.now)
+    assert row == replace(first, last_seen=world.now, bound_seen=world.now)  # seen bound
     assert touched.binding == row
 
 

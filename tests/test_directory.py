@@ -297,3 +297,31 @@ def test_the_message_store_is_looked_for_once_per_directory(tmp_path):
         store.append("probe-b", "hello")
         store.close()
         assert found("probe-b") is False  # the listing decided at its first question
+
+
+# The lead's ruling on (i) and R37's clock (GRO-50 lead note, 2026-11-12): a SessionStart
+# with no launch name never refreshes the name's 7-day clock, which runs from the last
+# time a binding was seen holding the name.
+
+
+@pytest.mark.parametrize("mail, expected", [(False, "gone"), (True, "queue-only")])
+def test_no_name_starts_never_refresh_an_undeclared_names_clock(world, mail, expected):
+    probe = claude(1001, "s-1")
+    world.bind(probe, launch="scratch-probe")  # bound: the clock starts here
+    world.bind(probe, launch=RENAMED, source="resume")  # G2 unbinds it
+    for _ in range(8):
+        world.now += DAY
+        world.bind(probe, launch=NO_NAME, source="resume")
+    rows = table(world, unhandled=lambda name: mail and name == "scratch-probe")
+    assert rows["scratch-probe"].deliverability == expected
+
+
+def test_a_name_never_held_runs_its_clock_from_when_it_was_first_seen(world):
+    fork = claude(1001, "s-fork")
+    world.bind(fork, launch="scratch-probe", source="fork")  # unbound from the start
+    for _ in range(6):
+        world.now += DAY
+        world.bind(fork, launch="scratch-probe", source="resume")
+    assert table(world)["scratch-probe"].deliverability == "queue-only"
+    world.now += 2 * DAY
+    assert table(world)["scratch-probe"].deliverability == "gone"
