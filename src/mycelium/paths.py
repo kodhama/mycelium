@@ -33,6 +33,10 @@ class Paths:
     def store(self) -> Path:
         return self.data / "store.sqlite3"
 
+    @property
+    def bindings(self) -> Path:
+        return self.state / "bindings.sqlite3"
+
 
 def resolve(env: Mapping[str, str] | None = None, home: Path | None = None) -> Paths:
     """The folders for this environment; `env` and `home` default to the process's own."""

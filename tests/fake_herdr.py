@@ -24,7 +24,8 @@ FAKE_HERDR_FAIL makes every call fail: `exit` (exit 3, a line on stderr),
 `garbage` (non-JSON, exit 0), `error` (a JSON error herdr would not mean as
 not-found, exit 1) or `sleep` (outlast any test timeout). In the state file,
 `read_delay` makes each `pane process-info` answer only after that many
-seconds, `slow` lists calls that hang, and `broken` lists calls that fail. FAKE_HERDR_LOG, when
+seconds, `delayed` lists `[call, seconds]` pairs answered only after that
+long, `slow` lists calls that hang, and `broken` lists calls that fail. FAKE_HERDR_LOG, when
 set, names a file that gets one JSON line per call's arguments.
 """
 
@@ -54,6 +55,9 @@ def answer(argv: list[str], state: dict) -> int:
     panes = state.get("panes", [])
     if argv[:2] == ["pane", "process-info"]:  # a pane read answers, but only after this long
         time.sleep(state.get("read_delay", 0))
+    for call, seconds in state.get("delayed", []):
+        if argv == call:
+            time.sleep(seconds)
     if argv in state.get("slow", []):  # this one call hangs, as a stalled herdr would
         time.sleep(30)
         return 0

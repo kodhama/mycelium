@@ -42,6 +42,10 @@ class Store(Protocol):
         Raises KeyError when the role has no message with that id."""
         ...
 
+    def has_unhandled(self, role: str) -> bool:
+        """Whether the role's mailbox holds a message not yet marked handled."""
+        ...
+
     def cursor(self, role: str, name: str) -> int:
         """Where the named cursor stands; 0 when nobody has moved it."""
         ...
