@@ -17,7 +17,6 @@ not make a name live. A name can be knocked only while live: Claude through
 the SendMessage hint, Codex through its queue (KTD9).
 """
 
-import os
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -26,7 +25,7 @@ from typing import Any
 
 from mycelium.bindings import Binding, Context, iso, liveness
 from mycelium.index import Index
-from mycelium.store import Store, open_store
+from mycelium.store import Store, files, open_store
 
 DELIVERABILITY = ("live", "absent", "queue-only", "held", "gone")
 UNDECLARED_GONE_SECONDS = 7 * 24 * 60 * 60
@@ -87,12 +86,13 @@ def unhandled_in(store_path: Path) -> Iterator[Unhandled]:
     At the first question it looks for the store once: it opens it through
     `open_store` and its rules (a symlink or a newer schema is refused:
     StoreRefused), and closes it with the context. With no store file then,
-    nothing is unhandled for the whole listing, and nothing is created (KTD13)."""
+    nothing is unhandled for the whole listing, and nothing is created (KTD13).
+    A store path that can't be looked at raises its OSError: it is not absent."""
     found: dict[str, Store | None] = {}
 
     def unhandled(name: str) -> bool:
         if "store" not in found:
-            found["store"] = open_store(store_path) if os.path.lexists(store_path) else None
+            found["store"] = open_store(store_path) if files.exists(store_path) else None
         store = found["store"]
         return store is not None and store.has_unhandled(name)
 

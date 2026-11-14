@@ -106,6 +106,19 @@ def _user_version(db: sqlite3.Connection) -> int:
     return db.execute("PRAGMA user_version").fetchone()[0]
 
 
+def exists(path: Path) -> bool:
+    """Whether anything, a symlink included, is at `path`.
+
+    Unlike `os.path.lexists`, a path that can't be looked at, such as one under
+    a folder that can't be searched, raises its OSError instead of reading as
+    absent. A path under a file reads as absent, as nothing can be there."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
 def make_private_dirs(folder: Path) -> None:
     """Create `folder` and any missing parents owner-only.
 

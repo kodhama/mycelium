@@ -175,6 +175,13 @@ class Context:
     """grove's claim for the name."""
     alive: Callable[[int, str], bool | None]
     """Whether the pid runs under the harness's name; None when that can't be told."""
+    clock: Callable[[], float] | None = None
+    """Reads the time again once the write lock is held, after a busy wait of up
+    to BUSY_TIMEOUT_SECONDS; None keeps `now`."""
+
+    def locked(self) -> "Context":
+        """This context with the time read again, for use once the write lock is held."""
+        return self if self.clock is None else replace(self, now=self.clock())
 
 
 @dataclass(frozen=True)
@@ -318,7 +325,8 @@ class Bindings:
         if context.boot is None:
             raise Refused("the boot id can't be read")
         with files.write(self._db):
-            done = self._adopt(caller, nonce, context)
+            # A pending claim can expire during the wait for the lock.
+            done = self._adopt(caller, nonce, context.locked())
         if isinstance(done, Refused):
             raise done  # after the commit: a refusal may unbind the caller
         return done

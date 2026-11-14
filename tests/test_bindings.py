@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import time
 from dataclasses import replace
 
 import pytest
@@ -198,6 +199,22 @@ def test_adopt_refuses_a_claim_it_cannot_take(world, over, why):
     world.claim(nonce="n1", **over)
     with pytest.raises(Refused, match=why):
         world.adopt(A, "n1")
+
+
+def test_adopt_reads_the_time_for_a_pending_claims_expiry_once_it_holds_the_write_lock(world):
+    # The claim runs out while adopt waits for the lock (lead review, GRO-50).
+    world.bind(A)
+    expires = world.now + 10
+    world.claim(nonce="n1", expires=time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(expires)))
+    locked = []
+
+    def clock() -> float:
+        locked.append(world.store._db.in_transaction)
+        return expires + 1
+
+    with pytest.raises(Refused, match="expired"):
+        world.store.adopt(A, "n1", replace(world.context(), clock=clock))
+    assert locked == [True]
 
 
 def test_adopt_with_no_claim_or_no_binding_is_refused(world):

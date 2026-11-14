@@ -3,6 +3,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import time
 from importlib.metadata import version
 from pathlib import Path
 
@@ -375,3 +376,60 @@ def test_directory_with_an_unreadable_message_store_exits_3(machine, org, capsys
     assert (code, out) == (3, "")
     assert "message store" in err
     assert "Traceback" not in err
+
+
+# A folder on the way that can't be searched is "can't tell" (exit 3), never "absent":
+# os.path.lexists reads it as absent (lead review, GRO-50).
+
+
+@pytest.fixture
+def unsearchable():
+    if os.geteuid() == 0:
+        pytest.skip("root can search any folder")
+    changed: list[Path] = []
+
+    def make(folder: Path) -> None:
+        folder.mkdir(parents=True, exist_ok=True)
+        folder.chmod(0)
+        changed.append(folder)
+
+    yield make
+    for folder in changed:
+        folder.chmod(0o700)
+
+
+@pytest.mark.parametrize("argv", [["whoami"], ["adopt", "n1"]])
+def test_a_state_folder_that_cant_be_searched_exits_3(machine, capsys, unsearchable, argv):
+    machine.bind("s-1")
+    unsearchable(machine.paths.state)
+    code, out, err = run(capsys, *argv)
+    assert (code, out) == (3, "")
+    assert "can't be read" in err
+
+
+def test_directory_with_a_state_folder_that_cant_be_searched_exits_3(
+    machine, org, capsys, unsearchable
+):
+    machine.bind("s-1", name="mq-pm")
+    unsearchable(machine.paths.state)
+    code, out, err = run(capsys, "directory")
+    assert (code, out) == (3, "")
+    assert "Traceback" not in err
+
+
+def test_directory_with_a_data_folder_that_cant_be_searched_exits_3(
+    machine, org, capsys, monkeypatch, unsearchable
+):
+    from mycelium import directory
+
+    machine.bind("s-2", name="scratch-probe", pid=5555)  # not running: queue-only or gone
+    monkeypatch.setattr(directory, "UNDECLARED_GONE_SECONDS", -(10**10))  # ask the store
+    unsearchable(machine.paths.data)
+    code, out, err = run(capsys, "directory")
+    assert (code, out) == (3, "")
+    assert "message store" in err
+
+
+def test_adopt_reads_the_clock_again_once_it_holds_the_write_lock(machine):
+    # A claim can expire during the store's busy wait (lead review, GRO-50).
+    assert cli._context().clock is time.time

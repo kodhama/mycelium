@@ -9,7 +9,9 @@ Exit codes for `whoami`, `adopt` and `directory` (lead ruling, GRO-50):
 - **3**: mycelium could not tell: the bindings store or the state folder could
   not be read, or failed once open, or the boot id is unknown. `adopt` and
   `directory` also exit 3 when the index or the cluster helper can't be read
-  (`whoami` reads neither), and `directory` when the message store can't be.
+  (`whoami` reads neither), and `directory` when the message store can't be;
+  it opens that store only for an undeclared name whose 7-day clock has run out.
+  A path under a folder that can't be searched is "can't tell", never absent.
 """
 
 import argparse
@@ -23,7 +25,7 @@ from contextlib import contextmanager
 from dataclasses import fields
 
 from mycelium import bindings, boot, clusters, identity, lease, paths
-from mycelium.store import StoreRefused
+from mycelium.store import StoreRefused, files
 
 REFUSED = 1
 USAGE = 2
@@ -115,7 +117,7 @@ def _directory(args: argparse.Namespace) -> int:
     index = _index(resolved)
     context = _context()  # without the boot id, every binding would read dead
     rows: list[bindings.Binding] = []
-    if os.path.lexists(resolved.bindings):
+    if _bindings_exist(resolved):
         with _opened(resolved) as store:
             rows = store.rows()
     try:
@@ -149,10 +151,15 @@ def _resolution(caller: identity.Caller) -> bindings.Resolution:
 
 
 def _bindings_exist(resolved: paths.Paths) -> bool:
-    """Whether the bindings file exists; a state path that is no folder is exit 3."""
-    if os.path.lexists(resolved.bindings):
-        return True
-    if os.path.lexists(resolved.state) and not os.path.isdir(resolved.state):
+    """Whether the bindings file exists. A state path that is no folder, or that
+    can't be looked at (a folder on the way can't be searched), is exit 3."""
+    try:
+        if files.exists(resolved.bindings):
+            return True
+        state = files.exists(resolved.state)
+    except OSError as error:
+        raise _Unavailable(f"the state folder {resolved.state} can't be read: {error}") from None
+    if state and not os.path.isdir(resolved.state):
         raise _Unavailable(f"the state folder {resolved.state} is not a folder")
     return False
 
@@ -183,6 +190,7 @@ def _context(claims: Callable[[str], lease.Claim] | None = None) -> bindings.Con
         declared=lambda name: False,
         claim=claims or (lambda name: lease.Claim("none")),
         alive=bindings.process_alive(identity.process_table),
+        clock=time.time,
     )
 
 

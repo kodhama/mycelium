@@ -1,5 +1,6 @@
 """The directory: each name's deliverability, harness, last seen and knock (R5, R36, R37; KTD3)."""
 
+import os
 import shutil
 import sqlite3
 
@@ -287,6 +288,19 @@ def test_a_no_name_row_shows_as_unbound_and_never_makes_its_name_live(world, nam
 
 def test_a_name_with_no_binding_shows_no_state(world):
     assert table(world)["w-running"].state is None
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can search any folder")
+def test_a_message_store_behind_a_folder_that_cant_be_searched_is_an_error_not_absent(tmp_path):
+    # os.path.lexists reads such a path as absent (lead review, GRO-50).
+    folder = tmp_path / "data"
+    folder.mkdir()
+    folder.chmod(0)
+    try:
+        with pytest.raises(PermissionError):
+            unhandled(folder / "store.sqlite3", "scratch-probe")
+    finally:
+        folder.chmod(0o700)
 
 
 def test_the_message_store_is_looked_for_once_per_directory(tmp_path):
