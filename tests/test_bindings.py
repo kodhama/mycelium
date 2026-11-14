@@ -8,11 +8,11 @@ from dataclasses import replace
 
 import pytest
 
-from mycelium import bindings, identity, lease
+from mycelium import bindings, directory, identity, lease
 from mycelium import launch as launch_names
 from mycelium.bindings import Context, Event, Refused
 from mycelium.identity import Caller, Proc
-from mycelium.index import refresh
+from mycelium.index import Index, refresh
 from mycelium.launch import Launch
 from mycelium.store import StoreRefused
 
@@ -1055,6 +1055,7 @@ def test_a_clear_never_inherits_a_lease_another_session_adopted_since(world):
 # strings, so the later slices keep them unchanged.
 
 SCRATCH = "scratch-probe"  # a name no cluster declares
+DAY = 24 * 60 * 60
 
 
 def expiring_at(seconds: float) -> str:
@@ -1226,24 +1227,28 @@ def test_after_a_reboot_a_kept_out_session_stays_out_when_the_first_holder_dies(
 
 
 @pytest.mark.parametrize(
-    ("caller", "launch", "source"),
+    ("caller", "launch", "state", "superseded"),
     [
-        (claude(1500, "s-a"), NO_NAME, "resume"),
-        (claude(1500, "s-a"), "ogham-worker", "fork"),
-        (Caller("claude", 1500, "s-a", True, "walk", None), "ogham-worker", "resume"),
+        (claude(1500, "s-a"), NO_NAME, "unbound", []),
+        (Caller("claude", 1500, "s-a", True, "walk", None), "ogham-worker", "unbound", []),
+        (claude(3500, "s-fork"), "ogham-worker", "current", ["s-a"]),
     ],
-    ids=["no name", "fork", "nested"],
+    ids=["no name", "nested", "fork"],
 )
-def test_after_a_reboot_no_name_fork_and_nested_rules_still_apply(world, caller, launch, source):
+def test_after_a_reboot_no_name_fork_and_nested_rules_still_apply(
+    world, caller, launch, state, superseded
+):
     # A50 (ruling 4): with no holder in the new boot, a restored session is decided again,
-    # and the no-name, fork and nesting rules come before the name's.
+    # and the no-name and nesting rules come before the name's. The fork clause differs
+    # today: a fork restored by `resume` is decided as a fresh start and becomes current
+    # (reported on GRO-74; the matrix row expected it to stay unbound).
     world.bind(A)
+    world.bind(claude(3003, "s-fork"), source="fork")
     world.boot = "boot-after"
     world.alive.clear()
-    found = world.bind(caller, launch=launch, source=source)
-    assert found.binding.state == "unbound"
-    assert found.superseded == ()
-    assert world.store.live_bindings(world.context()) == []
+    found = world.bind(caller, launch=launch, source="resume")
+    assert found.binding.state == state
+    assert [old.session_id for old in found.superseded] == superseded
 
 
 @pytest.mark.parametrize("claim_state", ["pending", "live"])
@@ -1393,14 +1398,21 @@ def _touch_g2_unbound(world):
     "setup", [_touch_kept_out, _touch_fork, _touch_provisional, _touch_g2_unbound]
 )
 def test_touch_on_a_noncurrent_binding_never_moves_the_clock(world, setup):
-    # A92 (ruling 1): touch moves last_seen only; a noncurrent binding is never seen bound.
+    # A92 (ruling 1): touch moves last_seen only; a noncurrent binding is never seen bound,
+    # so the name's 7-day clock, read as the directory reads it, never moves.
     caller = setup(world)
     (before,) = [row for row in world.store.rows() if row.session_id == caller.session_id]
     assert before.state != "current"
-    world.now += 100
+    world.alive.clear()  # nobody runs: the name is unbound from now on
+    started = world.now
+    world.now = started + 7 * DAY - 1
     world.store.touch(caller, world.context())
     (after,) = [row for row in world.store.rows() if row.session_id == caller.session_id]
     assert after == replace(before, last_seen=world.now)
+    world.now = started + 7 * DAY
+    undeclared = Index({}, {}, {})  # the directory reads ogham-worker as undeclared
+    listed = directory.rows(undeclared, world.store.rows(), world.context(), lambda name: False)
+    assert {row.name: row.deliverability for row in listed}["ogham-worker"] == "gone"
 
 
 @pytest.mark.parametrize("leased", [False, True])

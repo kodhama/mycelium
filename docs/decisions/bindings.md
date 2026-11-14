@@ -494,8 +494,9 @@ The lead's acceptance review of `7dfd265` found three small faults, fixed here.
 U4c rebuilds the binding rules on one record per name, in four slices (hub
 plan `areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `69a9549`,
 unit U1). This first slice changes no rule. It pins today's behaviour for
-every row of the plan's scenario matrix that had no test, so the later slices
-can't regress it, and it fixes this record where GRO-72's doc nits, and
+the 27 rows of the plan's scenario matrix that were right but had no test,
+and six rows of the plan's review (X1-X3, X7, X8, X10), so the later slices
+can't regress them, and it fixes this record where GRO-72's doc nits, and
 the reviews of this slice, found it off. The plan words the nits as edits to
 earlier entries; they land here instead, since this record is append-only
 (the lead's ruling, GRO-74).
