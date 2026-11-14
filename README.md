@@ -185,7 +185,7 @@ compares it with `KODHAMA_AGENT`.
 | 0 | the caller is current |
 | 1 | refused: provisional, superseded or unbound; the reason is on stderr and stdout is empty |
 | 2 | a usage error: an unknown command or bad arguments |
-| 3 | mycelium could not tell: the bindings store or state folder can't be read or fails once open, or the boot id is unknown |
+| 3 | mycelium could not tell: the bindings store or state folder can't be read (a folder on the way that can't be searched included) or fails once open, or the boot id is unknown |
 
 `whoami` reads neither the index nor the cluster helper. `adopt` and
 `directory` read both, and exit 3 when either can't be read.
@@ -217,8 +217,13 @@ from the clusters and the bindings each time. A name can be knocked only while l
   for a name with no binding, and `generation` also when its binding was
   never current. `knock.how` is null unless `knock.can` is true.
 - **Exit codes:** 0 when printed, 2 for a usage error, and 3 when the index,
-  the cluster helper, the bindings store or the message store can't be read,
-  or the boot id is unknown.
+  the cluster helper or the bindings store can't be read, or the boot id is
+  unknown.
+- **The message store is read only when needed.** `directory` opens it only
+  for an undeclared name with no hold and no live binding whose 7-day clock
+  has run out, to see whether mail waits. Only then does a store that can't
+  be read give exit 3: a symlink, a newer schema, a corrupt file, or a folder
+  on its way that can't be searched. A missing store means no mail waits.
 
 ## What the store survives
 

@@ -465,3 +465,26 @@ name with no possible holder.
 - **G4:** a G2-unbound session's stale nonce keeps a lease in force after
   another session adopted that nonce and died, while the unbound session
   hasn't re-run its hook.
+
+## 2026-11-14 acceptance-review fixes (GRO-50)
+
+The lead's acceptance review of `7dfd265` found three small faults, fixed here.
+
+- **A path that can't be looked at is not absent.** `os.path.lexists` reads
+  a path under a folder that can't be searched as absent. So `whoami` and
+  `adopt` exited 1 ("no binding for this session yet") where they could not
+  tell, and `directory` could call an undeclared name gone while its mail
+  waited. mycelium now looks with `lstat` (`files.exists`): only a missing
+  path, or one under a file, is absent, and any other error is exit 3.
+- **`adopt` reads the time once it holds the write lock.** The command line
+  read the time before the store's busy wait of up to 30 seconds, so a
+  pending claim that expired during the wait could still be adopted. Its
+  expiry is now checked against the time read after the lock is taken
+  (`Context.clock`).
+- **When `directory` exits 3 for the message store.** The entries above say
+  `directory` exits 3 when the message store can't be read. It opens that
+  store only for an undeclared name with no hold and no live binding whose
+  7-day clock has run out, to see whether mail waits. Only then does a store
+  that can't be read give exit 3: a symlink, a newer schema, a corrupt file,
+  or a folder on its way that can't be searched. Otherwise the listing exits
+  0 without reading it.
