@@ -488,3 +488,26 @@ The lead's acceptance review of `7dfd265` found three small faults, fixed here.
   that can't be read give exit 3: a symlink, a newer schema, a corrupt file,
   or a folder on its way that can't be searched. Otherwise the listing exits
   0 without reading it.
+
+## 2026-11-14 limit labels, a date and a correction (U4c U1, GRO-74)
+
+U4c rebuilds the binding rules on one record per name, in four slices (hub
+plan `areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `69a9549`,
+unit U1). This first slice changes no rule. It pins today's behaviour for
+every row of the plan's scenario matrix that had no test, so the later slices
+can't regress it, and it makes three fixes to this record (GRO-72's doc
+nits). The plan words them as edits to earlier entries; they land here
+instead, since this record is append-only (the lead's ruling, GRO-74).
+
+- **The known limits get names.** Their letters clashed with rule G2 and
+  lessons G3 above. From here on they are: **nameless clear** [F3],
+  **rename back** [G1], **startup escape** [G2], **nameless resume** [G3]
+  and **stale nonce** [G4]. The list itself is unchanged.
+- **The known-limits list dates from 2026-11-12.** "Known limits of the lease
+  rules, left to a follow-up story" is part of that day's entry: the
+  `71dad14` to `c041060` re-check it cites was reported on GRO-50 that day.
+- **"`adopt` refuses a live claim that names another session"**, in "The
+  returning paths, corrected", means a session of another process. A live
+  claim that names another session of the caller's own process can be
+  adopted, as a `/clear` or `/resume` successor does; the 2026-11-10 rules
+  above say the same.

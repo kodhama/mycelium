@@ -140,8 +140,14 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   superseded. The supersede is recorded once, so its notice can go out once;
   sending it is a later release's (mail, U5), and until then nothing tells
   the superseded session. Under grove's lease only the lease nonce makes a
-  session current: `mycelium adopt <nonce>`. A fork, or a session started
-  inside another one, stays unbound unless it adopts the nonce.
+  session current: `mycelium adopt <nonce>`, or a `/clear` or `/resume` in
+  the process that holds the lease, which keeps it. Two known limits, listed
+  in the record until a later release closes them, let another session bind
+  current without the nonce: a lease holder's `/clear` before its successor
+  has a launch name (nameless clear), and a nameless successor resumed in a
+  new process after the holder's has ended (nameless resume). A fork, or a
+  session started inside another one, stays unbound unless it adopts the
+  nonce.
 - **A resume or compaction keeps the session's binding**, even in a new
   process, as when herdr restores a pane: a current session stays current
   with its generation and lease, and a superseded one stays superseded. Two
@@ -166,7 +172,10 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   record lists the known gaps). They stay out even if that holder then
   dies: they return only as a fresh session, or by `mycelium adopt <nonce>`
   on a lease they can take: a pending claim, or a live one naming them or
-  another session of their own process.
+  another session of their own process. Two known limits in the record let
+  such a session take the name back all the same: a move to another herdr
+  name and back (rename back), and a start in a new process with source
+  `startup` (startup escape).
 - **A session decided again with no launch name keeps its old name**, as
   unbound. The directory shows it as `"state": "unbound"` unless a current
   binding under the name is shown first, and it never makes the name live or
@@ -193,8 +202,10 @@ compares it with `KODHAMA_AGENT`.
 **`mycelium adopt <nonce>` adopts grove's lease.** On success it prints what
 `whoami` prints and exits 0. It uses the same exit codes: 1 when it refuses
 (no binding yet, no lease, a wrong nonce, a claim from an earlier boot, an
-expired one, or a live one another session holds), 2 for a usage error, and
-3 as above, or when the index or the cluster helper can't be read.
+expired one, or a live one a session of another process holds), 2 for a
+usage error, and 3 as above, or when the index or the cluster helper can't
+be read. A live lease that another session of the caller's own process
+holds, as a `/clear` or `/resume` leaves it, can be adopted.
 
 A caller the walk can't resolve, or any caller before the bindings file
 exists, gets exit 1 from `whoami` and `adopt` before anything else is read.
