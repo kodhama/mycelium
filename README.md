@@ -141,14 +141,22 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   sending it is a later release's (mail, U5), and until then nothing tells
   the superseded session. Under grove's lease only the lease nonce makes a
   session current: `mycelium adopt <nonce>`, or a `/clear` or `/resume` with
-  a launch name in the process that holds the lease, which keeps it. Two
+  a launch name in the process that holds the lease, which keeps it. A
+  `/resume` keeps it only onto a session decided afresh: onto one whose
+  binding continues (kept out, a fork's, a nested one's, or current under
+  another name) it supersedes the holder, and the lease goes with it. Two
   known limits, listed in the record until a later release closes them, let
-  another session bind current without the nonce: a lease holder's `/clear`
-  whose new session has no launch name yet, or a `/resume` with no launch
-  name onto a session that doesn't carry the lease's nonce, which loses the
-  lease (nameless clear); and a successor with no nonce yet, resumed in a
-  new process after the holder's has ended (nameless resume). A fork, or a session started inside another one, stays unbound
-  unless it adopts the nonce.
+  another session bind current without the nonce. In the holder's process,
+  a `/clear` whose new session has no launch name yet, or a `/resume` with
+  no launch name, loses the lease (nameless clear), unless the `/resume`
+  lands on the session the lease names or on one that carries its nonce;
+  the latter keeps it only until its next start with a launch name, which
+  keeps it out and clears the nonce. And a successor with no nonce yet,
+  resumed in a new process after the holder's has ended, loses it too
+  (nameless resume). A fork, or a session started inside another one, stays
+  unbound unless it adopts the nonce, except a fork restored after a reboot
+  before any session of the new boot holds the name, which binds current
+  (below).
 - **A resume or compaction keeps the session's binding**, even in a new
   process, as when herdr restores a pane: a current session stays current
   with its generation and lease, and a superseded one stays superseded. Two
@@ -176,8 +184,9 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   on a lease they can take: a pending claim, or a live one naming them or
   another session of their own process. Two known limits in the record let
   such a session take the name all the same: a move to another herdr name
-  and back (rename back), and, for one that never held the name, such as a
-  fork, a start in a new process with source `startup` (startup escape).
+  and back (rename back), and, for one that never held the name nor went
+  provisional for it, such as a fork, a start in a new process with source
+  `startup` (startup escape).
 - **A session decided again with no launch name keeps its old name**, as
   unbound. The directory shows it as `"state": "unbound"` unless a current
   binding under the name is shown first, and it never makes the name live or

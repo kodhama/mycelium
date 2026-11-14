@@ -494,11 +494,11 @@ The lead's acceptance review of `7dfd265` found three small faults, fixed here.
 U4c rebuilds the binding rules on one record per name, in four slices (hub
 plan `areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `69a9549`,
 unit U1). This first slice changes no rule. It pins today's behaviour for
-the 27 rows the plan's scenario matrix marks right but untested (A50 only
-in part, below),
-and six rows of the plan's review (X1-X3, X7, X8, X10), so the later slices
-can't regress them, and it fixes this record where GRO-72's doc nits, and
-the reviews of this slice, found it off. The plan words the nits as edits to
+the 27 rows the plan's scenario matrix marks right but untested (for A50
+that verdict is right only in part, below), and six rows of the plan's
+review (X1-X3, X7, X8, X10), so the later slices can't regress them, and it
+fixes this record where GRO-72's doc nits, and the reviews of this slice,
+found it off. The plan words the nits as edits to
 earlier entries; they land here instead, since this record is append-only
 (the lead's ruling, GRO-74).
 
@@ -507,18 +507,27 @@ earlier entries; they land here instead, since this record is append-only
   **rename back** [G1], **startup escape** [G2], **nameless resume** [G3]
   and **stale nonce** [G4]. The list is otherwise unchanged, but the pins
   showed two of its limits reach differently from their text. The startup
-  escape reaches only a kept-out session that never held the name, such as
-  a fork: a kept-out former holder seen in a new pid with source `startup`
-  stays out. A superseded holder seen that way is decided again and can
-  bind current, but that is matrix row A43, which the plan's U4 fixes, not
-  this limit.
+  escape reaches only a kept-out session that never held the name nor went
+  provisional for it, such as a fork: a kept-out former holder seen in a new
+  pid with source `startup` stays out, and so does one that once went
+  provisional, since its `seen_holds` is set. A superseded holder seen that
+  way is decided again and can bind current, but that is matrix row A43,
+  which the plan's U4 fixes, not this limit.
 - **Nameless clear is wider than its text.** The lease is not kept "until the
   successor's name appears": the holder is superseded, so once named the
   successor binds current with no nonce, and an outside session can still
-  bind current after it. A `/resume` with no launch name does the same,
-  unless the session it resumes carries the lease's nonce: a binding under
-  the name is not enough. A `/clear` or `/resume` with a launch name keeps
-  the lease.
+  bind current after it. A `/resume` with no launch name in the holder's
+  process does the same, unless it lands on the session the claim names or
+  on one that carries the lease's nonce (`runs()` in `_for_name` matches
+  either). The nonce keeps the lease only until that session's next start
+  with a launch name, which keeps it out and clears its nonce; an outside
+  session can then bind current without the nonce.
+- **A launch name keeps the lease less often than the text says.** A
+  `/clear` with a launch name keeps it, and so does a `/resume` with one
+  onto a session decided afresh. A `/resume` onto a session whose binding
+  continues (kept out, a fork's, a nested one's, or current under another
+  name) re-confirms that binding, which supersedes the holder in its
+  process, and an outside session can then bind current without the nonce.
 - **A fork restored after a reboot becomes current.** With no holder in the
   new boot, a fork that `resume` restores is decided as a fresh start: it
   binds current and supersedes the dead holder. Matrix row A50 expected the
