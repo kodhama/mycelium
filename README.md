@@ -143,8 +143,9 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   session current: `mycelium adopt <nonce>`, or a `/clear` or `/resume` with
   a launch name in the process that holds the lease, which keeps it. A
   `/resume` keeps it only onto a session decided afresh: onto one whose
-  binding continues (kept out, a fork's, a nested one's, or current under
-  another name) it supersedes the holder, and the lease goes with it. Two
+  binding continues (kept out, a fork's, a nested one's, or current or
+  superseded under another name) it supersedes the holder, and the lease
+  goes with it. Two
   known limits, listed in the record until a later release closes them, let
   another session bind current without the nonce. In the holder's process,
   a `/clear` whose new session has no launch name yet, or a `/resume` with
@@ -154,9 +155,9 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   keeps it out and clears the nonce. And a successor with no nonce yet,
   resumed in a new process after the holder's has ended, loses it too
   (nameless resume). A fork, or a session started inside another one, stays
-  unbound unless it adopts the nonce, except a fork restored after a reboot
-  before any session of the new boot holds the name, which binds current
-  (below).
+  unbound unless it adopts the nonce. With no lease in force, a fork
+  restored after a reboot before any session of the new boot holds the name
+  binds current (below).
 - **A resume or compaction keeps the session's binding**, even in a new
   process, as when herdr restores a pane: a current session stays current
   with its generation and lease, and a superseded one stays superseded. Two

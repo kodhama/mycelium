@@ -525,9 +525,10 @@ earlier entries; they land here instead, since this record is append-only
 - **A launch name keeps the lease less often than the text says.** A
   `/clear` with a launch name keeps it, and so does a `/resume` with one
   onto a session decided afresh. A `/resume` onto a session whose binding
-  continues (kept out, a fork's, a nested one's, or current under another
-  name) re-confirms that binding, which supersedes the holder in its
-  process, and an outside session can then bind current without the nonce.
+  continues (kept out, a fork's, a nested one's, or current or superseded
+  under another name) re-confirms that binding, which supersedes the holder
+  in its process, and an outside session can then bind current without the
+  nonce.
 - **A fork restored after a reboot becomes current.** With no holder in the
   new boot, a fork that `resume` restores is decided as a fresh start: it
   binds current and supersedes the dead holder. Matrix row A50 expected the
