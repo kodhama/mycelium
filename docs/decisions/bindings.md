@@ -494,7 +494,8 @@ The lead's acceptance review of `7dfd265` found three small faults, fixed here.
 U4c rebuilds the binding rules on one record per name, in four slices (hub
 plan `areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `69a9549`,
 unit U1). This first slice changes no rule. It pins today's behaviour for
-the 27 rows the plan's scenario matrix marks right but untested (one in part),
+the 27 rows the plan's scenario matrix marks right but untested (A50 only
+in part, below),
 and six rows of the plan's review (X1-X3, X7, X8, X10), so the later slices
 can't regress them, and it fixes this record where GRO-72's doc nits, and
 the reviews of this slice, found it off. The plan words the nits as edits to
@@ -514,9 +515,10 @@ earlier entries; they land here instead, since this record is append-only
 - **Nameless clear is wider than its text.** The lease is not kept "until the
   successor's name appears": the holder is superseded, so once named the
   successor binds current with no nonce, and an outside session can still
-  bind current after it. A `/resume` with no launch name onto a session
-  that has no binding under the name does the same. A `/clear` or `/resume`
-  with a launch name keeps the lease.
+  bind current after it. A `/resume` with no launch name does the same,
+  unless the session it resumes carries the lease's nonce: a binding under
+  the name is not enough. A `/clear` or `/resume` with a launch name keeps
+  the lease.
 - **A fork restored after a reboot becomes current.** With no holder in the
   new boot, a fork that `resume` restores is decided as a fresh start: it
   binds current and supersedes the dead holder. Matrix row A50 expected the

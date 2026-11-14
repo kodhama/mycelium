@@ -144,11 +144,10 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   a launch name in the process that holds the lease, which keeps it. Two
   known limits, listed in the record until a later release closes them, let
   another session bind current without the nonce: a lease holder's `/clear`
-  whose new session has no launch name yet, or such a `/resume` onto a
-  session with no binding under the name, which loses the lease (nameless
-  clear); and a successor with no nonce
-  yet, resumed in a new process after the holder's has ended (nameless
-  resume). A fork, or a session started inside another one, stays unbound
+  whose new session has no launch name yet, or a `/resume` with no launch
+  name onto a session that doesn't carry the lease's nonce, which loses the
+  lease (nameless clear); and a successor with no nonce yet, resumed in a
+  new process after the holder's has ended (nameless resume). A fork, or a session started inside another one, stays unbound
   unless it adopts the nonce.
 - **A resume or compaction keeps the session's binding**, even in a new
   process, as when herdr restores a pane: a current session stays current
