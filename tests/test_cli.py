@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from mycelium import bindings, boot, cli, clusters, identity, lease
+from mycelium import bindings, boot, cli, clusters, identity, launch, lease, pane
 from mycelium import paths as mycelium_paths
 from mycelium.cli import main
 from mycelium.index import refresh
@@ -458,8 +458,6 @@ def test_whoami_reads_the_stored_binding_without_looking_at_launch_names(
     machine, capsys, monkeypatch
 ):
     # A17: a rename between hooks goes unseen until the next SessionStart.
-    from mycelium import launch, pane
-
     machine.bind("s-1")
     monkeypatch.setenv("KODHAMA_AGENT", "ogham-lead")  # the session is now named otherwise
     monkeypatch.setattr(launch, "resolve", _never)

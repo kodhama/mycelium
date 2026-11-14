@@ -429,8 +429,7 @@ def _dead_current(world):
 
 def _only_noncurrent(world):
     world.bind(claude(1001, "s-1"), launch="w-running")
-    renamed = Launch(None, "launch names disagree", {"pane": "w-parked"}, "named")
-    world.bind(claude(1001, "s-1"), launch=renamed, source="resume")  # G2: unbound
+    world.bind(claude(1001, "s-1"), launch=RENAMED, source="resume")  # G2: unbound
     world.bind(claude(3003, "s-fork"), launch="w-running", source="fork")
     world.now += 10
     world.store.touch(claude(1001, "s-1"), world.context())  # s-1 seen last

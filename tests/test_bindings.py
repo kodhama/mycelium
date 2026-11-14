@@ -1061,10 +1061,18 @@ def expiring_at(seconds: float) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(seconds))
 
 
-def kept_out(world, holder=B):
-    """A held ogham-worker at generation 1; G2 unbound it; `holder` took the name. A is out."""
+def nested_codex(thread: str, pid: int = 8008) -> Caller:
+    return Caller("codex", pid, thread, True, "walk", None)
+
+
+def _named_unbound(world):
     world.bind(A)
     world.bind(A, launch=RENAMED, source="resume")
+
+
+def kept_out(world, holder=B):
+    """A held ogham-worker at generation 1; G2 unbound it; `holder` took the name. A is out."""
+    _named_unbound(world)
     world.bind(holder)
     found = world.bind(A, source="resume")
     assert found.binding.state == "unbound"
@@ -1100,7 +1108,7 @@ def test_a_continuing_start_with_no_launch_source_keeps_a_current_binding(world,
 def test_a_nested_session_resumed_in_a_new_pid_stays_nested_unbound(world, source, pid):
     # A20: the stored nested reason is re-confirmed, even once the caller is no longer nested.
     world.bind(A)
-    world.bind(Caller("codex", 8008, "t-nested", True, "walk", None))
+    world.bind(nested_codex("t-nested"))
     again = world.bind(Caller("codex", pid, "t-nested", False, "walk", None), source=source)
     assert again.binding.state == "unbound"
     assert again.binding.generation is None
@@ -1146,6 +1154,16 @@ def test_a_bind_supersedes_the_processes_earlier_session_whatever_state_it_gets(
     assert (again.binding.state, again.superseded) == (state, ())
 
 
+def _pending_claim(world):
+    world.claim(nonce="n1")
+
+
+def _live_claim_of_a_nested_session(world):
+    # The holder is a nested session of the name, which never held the name.
+    world.bind(nested_codex("t-z"))
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="t-z")
+
+
 def _claim_removed(world):
     lease.claim_path(world.homes, "ogham-worker").unlink()
 
@@ -1163,17 +1181,19 @@ def _live_holder_died(world):
 
 
 @pytest.mark.parametrize(
-    "lease_ends",
-    [_claim_removed, _claim_unreadable, _claim_from_an_earlier_boot, _live_holder_died],
+    ("lease_starts", "lease_ends"),
+    [
+        (_pending_claim, _claim_removed),
+        (_pending_claim, _claim_unreadable),
+        (_pending_claim, _claim_from_an_earlier_boot),
+        (_live_claim_of_a_nested_session, _live_holder_died),
+    ],
+    ids=["removed", "unreadable", "earlier boot", "holder died"],
 )
-def test_a_provisional_session_becomes_current_once_its_lease_ends(world, lease_ends):
+def test_a_provisional_session_becomes_current_once_its_lease_ends(world, lease_starts, lease_ends):
     # A36: nobody held the name since, so with no lease in force the next hook makes it
-    # current. The live claim's holder is a nested session of the name, which never held it.
-    if lease_ends is _live_holder_died:
-        world.bind(Caller("codex", 8008, "t-z", True, "walk", None))
-        world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="t-z")
-    else:
-        world.claim(nonce="n1")
+    # current.
+    lease_starts(world)
     assert world.bind(A).binding.state == "provisional"
     lease_ends(world)
     later = world.bind(A, source="resume")
@@ -1235,7 +1255,7 @@ def test_after_a_reboot_a_session_restored_under_a_running_lease_is_provisional(
     if claim_state == "pending":
         world.claim(nonce="n1", boot="boot-after")
     else:  # a running session of the name that never held it holds the live claim
-        world.bind(Caller("codex", 8008, "t-z", True, "walk", None))
+        world.bind(nested_codex("t-z"))
         world.claim(
             nonce="n1", boot="boot-after", state="live", expires=None, pane="w1:p1", session="t-z"
         )
@@ -1304,11 +1324,6 @@ def test_adopt_with_no_launch_name_is_refused(world):
 
 def _current(world):
     world.bind(A)
-
-
-def _named_unbound(world):
-    world.bind(A)
-    world.bind(A, launch=RENAMED, source="resume")
 
 
 def _superseded(world):
