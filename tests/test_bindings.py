@@ -1070,10 +1070,10 @@ def _named_unbound(world):
     world.bind(A, launch=RENAMED, source="resume")
 
 
-def kept_out(world, holder=B):
-    """A held ogham-worker at generation 1; G2 unbound it; `holder` took the name. A is out."""
+def kept_out(world):
+    """A held ogham-worker at generation 1; G2 unbound it; B took the name. A is out."""
     _named_unbound(world)
-    world.bind(holder)
+    world.bind(B)
     found = world.bind(A, source="resume")
     assert found.binding.state == "unbound"
     return found
@@ -1308,8 +1308,9 @@ def test_a_pidless_successor_under_a_pidless_holders_live_lease_stays_provisiona
 @pytest.mark.parametrize(("expires_in", "state"), [(0, "current"), (1, "provisional")])
 def test_a_pending_claim_that_expires_exactly_now_is_not_in_force(world, expires_in, state):
     # A63: a pending claim is in force only while its expiry is still ahead.
-    world.claim(nonce="n1", expires=expiring_at(world.now + 1 + expires_in))  # bind ticks 1s
-    assert world.bind(A).binding.state == state
+    world.claim(nonce="n1", expires=expiring_at(world.now + expires_in))
+    found = world.store.bind(Event("startup", A, named("ogham-worker")), world.context())
+    assert found.binding.state == state
 
 
 def test_adopt_with_no_launch_name_is_refused(world):

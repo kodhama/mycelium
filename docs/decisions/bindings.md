@@ -495,19 +495,32 @@ U4c rebuilds the binding rules on one record per name, in four slices (hub
 plan `areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `69a9549`,
 unit U1). This first slice changes no rule. It pins today's behaviour for
 every row of the plan's scenario matrix that had no test, so the later slices
-can't regress it, and it makes three fixes to this record (GRO-72's doc
-nits). The plan words them as edits to earlier entries; they land here
-instead, since this record is append-only (the lead's ruling, GRO-74).
+can't regress it, and it fixes this record where GRO-72's doc nits, and
+the reviews of this slice, found it off. The plan words the nits as edits to
+earlier entries; they land here instead, since this record is append-only
+(the lead's ruling, GRO-74).
 
 - **The known limits get names.** Their letters clashed with rule G2 and
   lessons G3 above. From here on they are: **nameless clear** [F3],
   **rename back** [G1], **startup escape** [G2], **nameless resume** [G3]
-  and **stale nonce** [G4]. The list itself is unchanged.
+  and **stale nonce** [G4]. The list itself is unchanged, with one
+  narrowing the pins showed: the startup escape reaches only a kept-out
+  session that never held the name, such as a fork. A former holder seen in
+  a new pid with source `startup` stays out.
+- **Nameless clear is wider than its text.** The lease is not kept "until the
+  successor's name appears": the holder is superseded, so once named the
+  successor binds current with no nonce, and an outside session can still
+  bind current after it. A `/resume` onto another session with no launch
+  name does the same. A `/clear` or `/resume` with a launch name keeps the
+  lease.
 - **The known-limits list dates from 2026-11-12.** "Known limits of the lease
   rules, left to a follow-up story" is part of that day's entry: the
   `71dad14` to `c041060` re-check it cites was reported on GRO-50 that day.
 - **"`adopt` refuses a live claim that names another session"**, in "The
   returning paths, corrected", means a session of another process. A live
   claim that names another session of the caller's own process can be
-  adopted, as a `/clear` or `/resume` successor does; the 2026-11-10 rules
-  above say the same.
+  adopted, as a `/clear` or `/resume` successor does; the 2026-11-10 adopt
+  rule above says the same ("a live one held by this session or another
+  session of its process"). The 2026-11-10 exit-code entry's "a live claim
+  another session holds" reads the same way. A claim naming a session of
+  another process is refused whether that session still runs or not.

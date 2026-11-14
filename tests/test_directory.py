@@ -417,23 +417,25 @@ def _live_current(world):
     world.bind(claude(2002, "s-2"), launch="w-running")  # generation 2: s-1 superseded
     world.now += 10
     world.store.touch(claude(1001, "s-1"), world.context())  # s-1 seen last
-    return {"state": "current", "generation": 2}
+    return {"harness": "claude", "state": "current", "generation": 2}
 
 
 def _dead_current(world):
     world.bind(claude(1001, "s-1"), launch="w-running")  # generation 1
     world.bind(claude(3003, "s-fork"), launch="w-running", source="fork")  # seen later
     world.alive.discard(1001)
-    return {"state": "current", "generation": 1}
+    return {"harness": "claude", "state": "current", "generation": 1}
 
 
 def _only_noncurrent(world):
+    # The latest seen is neither the first bound nor the last: the Codex fork between.
     world.bind(claude(1001, "s-1"), launch="w-running")
     world.bind(claude(1001, "s-1"), launch=RENAMED, source="resume")  # G2: unbound
+    world.bind(codex_tui("t-fork"), launch="w-running", source="fork")
     world.bind(claude(3003, "s-fork"), launch="w-running", source="fork")
     world.now += 10
-    world.store.touch(claude(1001, "s-1"), world.context())  # s-1 seen last
-    return {"state": "unbound", "generation": 1}
+    world.store.touch(codex_tui("t-fork"), world.context())
+    return {"harness": "codex", "state": "unbound", "generation": None}
 
 
 @pytest.mark.parametrize("setup", [_live_current, _dead_current, _only_noncurrent])
@@ -442,6 +444,6 @@ def test_the_directory_shows_the_live_then_the_latest_current_then_the_latest_bi
     # sighting of any binding of the name.
     shown = setup(world)
     row = table(world)["w-running"]
-    assert {"state": row.state, "generation": row.generation} == shown
+    assert {"harness": row.harness, "state": row.state, "generation": row.generation} == shown
     latest = max(b.last_seen for b in world.store.rows() if b.name == "w-running")
     assert row.last_seen == directory.iso(latest)
