@@ -411,9 +411,13 @@ def test_directory_with_a_state_folder_that_cant_be_searched_exits_3(
     machine, org, capsys, unsearchable
 ):
     machine.bind("s-1", name="mq-pm")
+    index = cli._index(machine.paths)
+    # The index is read first; hand it over, so the bindings store's check is reached.
+    machine.monkeypatch.setattr(cli, "_index", lambda resolved: index)
     unsearchable(machine.paths.state)
     code, out, err = run(capsys, "directory")
     assert (code, out) == (3, "")
+    assert "state folder" in err and "can't be read" in err
     assert "Traceback" not in err
 
 
