@@ -494,7 +494,7 @@ The lead's acceptance review of `7dfd265` found three small faults, fixed here.
 U4c rebuilds the binding rules on one record per name, in four slices (hub
 plan `areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `69a9549`,
 unit U1). This first slice changes no rule. It pins today's behaviour for
-the 27 rows of the plan's scenario matrix that were right but had no test,
+the 27 rows the plan's scenario matrix marks right but untested (one in part),
 and six rows of the plan's review (X1-X3, X7, X8, X10), so the later slices
 can't regress them, and it fixes this record where GRO-72's doc nits, and
 the reviews of this slice, found it off. The plan words the nits as edits to
@@ -504,16 +504,26 @@ earlier entries; they land here instead, since this record is append-only
 - **The known limits get names.** Their letters clashed with rule G2 and
   lessons G3 above. From here on they are: **nameless clear** [F3],
   **rename back** [G1], **startup escape** [G2], **nameless resume** [G3]
-  and **stale nonce** [G4]. The list itself is unchanged, with one
-  narrowing the pins showed: the startup escape reaches only a kept-out
-  session that never held the name, such as a fork. A former holder seen in
-  a new pid with source `startup` stays out.
+  and **stale nonce** [G4]. The list is otherwise unchanged, but the pins
+  showed two of its limits reach differently from their text. The startup
+  escape reaches only a kept-out session that never held the name, such as
+  a fork: a kept-out former holder seen in a new pid with source `startup`
+  stays out. A superseded holder seen that way is decided again and can
+  bind current, but that is matrix row A43, which the plan's U4 fixes, not
+  this limit.
 - **Nameless clear is wider than its text.** The lease is not kept "until the
   successor's name appears": the holder is superseded, so once named the
   successor binds current with no nonce, and an outside session can still
-  bind current after it. A `/resume` onto another session with no launch
-  name does the same. A `/clear` or `/resume` with a launch name keeps the
-  lease.
+  bind current after it. A `/resume` with no launch name onto a session
+  that has no binding under the name does the same. A `/clear` or `/resume`
+  with a launch name keeps the lease.
+- **A fork restored after a reboot becomes current.** With no holder in the
+  new boot, a fork that `resume` restores is decided as a fresh start: it
+  binds current and supersedes the dead holder. Matrix row A50 expected the
+  fork rules to keep it unbound, and the rule above that "a fork or a nested
+  session stays unbound until it adopts the nonce" does not hold for it. Its
+  pin records today's behaviour, reported on GRO-74 for a later slice to
+  rule on.
 - **The known-limits list dates from 2026-11-12.** "Known limits of the lease
   rules, left to a follow-up story" is part of that day's entry: the
   `71dad14` to `c041060` re-check it cites was reported on GRO-50 that day.

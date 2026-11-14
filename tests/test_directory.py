@@ -401,10 +401,12 @@ def test_nothing_deletes_a_binding_or_a_name_record(world):
     # record, which the next holder's generation shows.
     world.bind(claude(1001, "s-1"), launch="scratch-probe")
     world.bind(claude(2002, "s-2"), launch="scratch-probe")
+    keys = [row.key for row in world.store.rows()]
+    assert len(keys) == 2  # taken before any read, so a delete during one shows
     world.alive.clear()
     world.now += 30 * DAY
     assert table(world)["scratch-probe"].deliverability == "gone"
-    keys = [row.key for row in world.store.rows()]
+    assert [row.key for row in world.store.rows()] == keys
     world.store.close()
     world.store = bindings.open_bindings(world.path)
     assert [row.key for row in world.store.rows()] == keys

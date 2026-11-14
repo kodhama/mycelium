@@ -143,9 +143,10 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   session current: `mycelium adopt <nonce>`, or a `/clear` or `/resume` with
   a launch name in the process that holds the lease, which keeps it. Two
   known limits, listed in the record until a later release closes them, let
-  another session bind current without the nonce: a lease holder's `/clear`,
-  or `/resume` onto another session, whose new session has no launch name
-  yet, which loses the lease (nameless clear); and a successor with no nonce
+  another session bind current without the nonce: a lease holder's `/clear`
+  whose new session has no launch name yet, or such a `/resume` onto a
+  session with no binding under the name, which loses the lease (nameless
+  clear); and a successor with no nonce
   yet, resumed in a new process after the holder's has ended (nameless
   resume). A fork, or a session started inside another one, stays unbound
   unless it adopts the nonce.
