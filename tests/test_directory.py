@@ -7,7 +7,7 @@ import sqlite3
 import pytest
 from test_bindings import NOW, World, claude, codex_tui
 
-from mycelium import directory
+from mycelium import bindings, directory
 from mycelium.index import HOLD_SECONDS, Hold, Index, refresh
 from mycelium.launch import Launch
 from mycelium.store import SCHEMA_VERSION, StoreRefused, open_store
@@ -356,3 +356,93 @@ def test_a_name_never_held_runs_its_clock_from_its_first_sighting(world):
     world.bind(claude(2002, "s-fork-2"), launch="scratch-probe", source="fork")
     world.now += 3 * DAY
     assert table(world)["scratch-probe"].deliverability == "gone"
+
+
+# U4c U1: characterization pins of today's behaviour at cae4d6d (GRO-74, plan Appendix A).
+
+
+def test_a_running_name_with_only_superseded_bindings_is_absent(world):
+    # A97: a /clear in s-1's process moves the session to another name, superseding s-1.
+    world.bind(claude(1001, "s-1"), launch="w-running")
+    world.bind(claude(1001, "s-2"), launch="w-parked", source="clear")
+    assert [b.state for b in world.store.rows() if b.name == "w-running"] == ["superseded"]
+    row = table(world)["w-running"]
+    assert row.deliverability == "absent"
+    assert row.knock == {"can": False, "how": None}
+
+
+def test_a_done_name_is_gone_even_with_a_live_binding(world):
+    # A100: done comes before live.
+    world.bind(claude(1001, "s-1"), launch="w-done")
+    assert world.store.live_bindings(world.context()) != []
+    row = table(world)["w-done"]
+    assert (row.deliverability, row.knock) == ("gone", {"can": False, "how": None})
+
+
+def test_a_held_name_is_held_then_gone_even_with_a_live_binding(world):
+    # A102: the index's hold comes before an undeclared name's live binding.
+    world.bind(claude(1001, "s-1"), launch="w-held")
+    assert world.store.live_bindings(world.context()) != []
+    assert table(world)["w-held"].deliverability == "held"
+    world.now = NOW - DAY + HOLD_SECONDS
+    assert table(world)["w-held"].deliverability == "gone"
+
+
+def test_an_undeclared_name_with_a_live_holder_unseen_for_seven_days_is_live(world):
+    # A104 (ruling 1): only an unbound name's clock runs out.
+    world.bind(claude(1001, "s-1"), launch="scratch-probe")
+    world.now += 8 * DAY
+    row = table(world)["scratch-probe"]
+    assert (row.deliverability, row.knock["can"]) == ("live", True)
+
+
+def test_nothing_deletes_a_binding_or_a_name_record(world):
+    # A111: rows outlive their name's clock and a directory read; so does the name's
+    # record, which the next holder's generation shows.
+    world.bind(claude(1001, "s-1"), launch="scratch-probe")
+    world.bind(claude(2002, "s-2"), launch="scratch-probe")
+    world.alive.clear()
+    world.now += 30 * DAY
+    assert table(world)["scratch-probe"].deliverability == "gone"
+    keys = [row.key for row in world.store.rows()]
+    world.store.close()
+    world.store = bindings.open_bindings(world.path)
+    assert [row.key for row in world.store.rows()] == keys
+    later = world.bind(claude(3003, "s-3"), launch="scratch-probe")
+    assert later.binding.generation == 3
+
+
+def _live_current(world):
+    world.bind(claude(1001, "s-1"), launch="w-running")  # generation 1
+    world.bind(claude(2002, "s-2"), launch="w-running")  # generation 2: s-1 superseded
+    world.now += 10
+    world.store.touch(claude(1001, "s-1"), world.context())  # s-1 seen last
+    return {"state": "current", "generation": 2}
+
+
+def _dead_current(world):
+    world.bind(claude(1001, "s-1"), launch="w-running")  # generation 1
+    world.bind(claude(3003, "s-fork"), launch="w-running", source="fork")  # seen later
+    world.alive.discard(1001)
+    return {"state": "current", "generation": 1}
+
+
+def _only_noncurrent(world):
+    world.bind(claude(1001, "s-1"), launch="w-running")
+    renamed = Launch(None, "launch names disagree", {"pane": "w-parked"}, "named")
+    world.bind(claude(1001, "s-1"), launch=renamed, source="resume")  # G2: unbound
+    world.bind(claude(3003, "s-fork"), launch="w-running", source="fork")
+    world.now += 10
+    world.store.touch(claude(1001, "s-1"), world.context())  # s-1 seen last
+    return {"state": "unbound", "generation": 1}
+
+
+@pytest.mark.parametrize("setup", [_live_current, _dead_current, _only_noncurrent])
+def test_the_directory_shows_the_live_then_the_latest_current_then_the_latest_binding(world, setup):
+    # A112: the shown binding and last_seen are chosen apart; last_seen is the latest
+    # sighting of any binding of the name.
+    shown = setup(world)
+    row = table(world)["w-running"]
+    assert {"state": row.state, "generation": row.generation} == shown
+    latest = max(b.last_seen for b in world.store.rows() if b.name == "w-running")
+    assert row.last_seen == directory.iso(latest)

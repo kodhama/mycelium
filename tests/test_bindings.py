@@ -9,6 +9,7 @@ from dataclasses import replace
 import pytest
 
 from mycelium import bindings, identity, lease
+from mycelium import launch as launch_names
 from mycelium.bindings import Context, Event, Refused
 from mycelium.identity import Caller, Proc
 from mycelium.index import refresh
@@ -1046,3 +1047,466 @@ def test_a_clear_never_inherits_a_lease_another_session_adopted_since(world):
     cleared = world.bind(claude(1001, "s-a2"), source="clear")  # A never re-ran its hook
     assert cleared.binding.state == "provisional"
     assert world.resolve(B).state == "current"
+
+
+# U4c U1: characterization pins of today's behaviour at cae4d6d (GRO-74). Each pins one
+# ok-unpinned row of the scenario matrix (plan Appendix A) or a review row (Appendix B),
+# so the rebuild in U2-U4 can't regress it. They assert states and outcomes, not reason
+# strings, so the later slices keep them unchanged.
+
+SCRATCH = "scratch-probe"  # a name no cluster declares
+
+
+def expiring_at(seconds: float) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(seconds))
+
+
+def kept_out(world, holder=B):
+    """A held ogham-worker at generation 1; G2 unbound it; `holder` took the name. A is out."""
+    world.bind(A)
+    world.bind(A, launch=RENAMED, source="resume")
+    world.bind(holder)
+    found = world.bind(A, source="resume")
+    assert found.binding.state == "unbound"
+    return found
+
+
+def test_a_session_whose_launch_sources_disagree_binds_unbound_with_no_name(world):
+    # A08: launch.resolve's disagreement feeds the store's unbound branch.
+    tui = codex_tui("t-1")
+    disagreeing = launch_names.resolve(tui, "ogham-worker", env={"KODHAMA_AGENT": "ogham-lead"})
+    assert disagreeing.name is None
+    found = world.bind(tui, launch=disagreeing)
+    assert (found.binding.state, found.binding.name) == ("unbound", None)
+    assert found.binding.generation is None
+    assert found.superseded == ()
+
+
+@pytest.mark.parametrize(
+    ("source", "pid"), [("startup", 1001), ("resume", 1500), ("compact", 1500)]
+)
+def test_a_continuing_start_with_no_launch_source_keeps_a_current_binding(world, source, pid):
+    # A14: empty names never disagree, so the re-confirmed binding stays current.
+    first = world.bind(A).binding
+    again = world.bind(claude(pid, "s-a"), launch=NO_NAME, source=source)
+    assert (again.binding.state, again.binding.name) == ("current", "ogham-worker")
+    assert again.binding.generation == first.generation
+    assert again.superseded == ()
+
+
+@pytest.mark.parametrize(
+    ("source", "pid"), [("startup", 8008), ("resume", 8500), ("compact", 8500)]
+)
+def test_a_nested_session_resumed_in_a_new_pid_stays_nested_unbound(world, source, pid):
+    # A20: the stored nested reason is re-confirmed, even once the caller is no longer nested.
+    world.bind(A)
+    world.bind(Caller("codex", 8008, "t-nested", True, "walk", None))
+    again = world.bind(Caller("codex", pid, "t-nested", False, "walk", None), source=source)
+    assert again.binding.state == "unbound"
+    assert again.binding.generation is None
+    assert again.superseded == ()
+    assert world.resolve(A).state == "current"
+
+
+def _no_setup(world):
+    pass
+
+
+def _claim_ogham_lead(world):
+    world.claim(name="ogham-lead", nonce="n1")
+
+
+def _supersede_s_x(world):
+    # s-x loses ogham-lead to s-y; resumed into A's pid, it continues, still superseded.
+    world.bind(claude(3003, "s-x"), launch="ogham-lead")
+    world.bind(claude(4004, "s-y"), launch="ogham-lead")
+
+
+@pytest.mark.parametrize(
+    ("state", "setup", "session", "launch", "source"),
+    [
+        ("current", _no_setup, "s-a2", "ogham-worker", "clear"),
+        ("provisional", _claim_ogham_lead, "s-a2", "ogham-lead", "clear"),
+        ("unbound", _no_setup, "s-a2", NO_NAME, "clear"),
+        ("superseded", _supersede_s_x, "s-x", "ogham-lead", "resume"),
+    ],
+)
+def test_a_bind_supersedes_the_processes_earlier_session_whatever_state_it_gets(
+    world, state, setup, session, launch, source
+):
+    # A30: one process runs one session; its earlier session is superseded once.
+    world.bind(A)
+    setup(world)
+    caller = claude(1001, session)
+    found = world.bind(caller, launch=launch, source=source)
+    assert found.binding.state == state
+    assert [old.session_id for old in found.superseded] == ["s-a"]
+    assert world.resolve(A).state == "superseded"
+    again = world.bind(caller, launch=launch, source=source)  # the same start again
+    assert (again.binding.state, again.superseded) == (state, ())
+
+
+def _claim_removed(world):
+    lease.claim_path(world.homes, "ogham-worker").unlink()
+
+
+def _claim_unreadable(world):
+    lease.claim_path(world.homes, "ogham-worker").write_text("not json")
+
+
+def _claim_from_an_earlier_boot(world):
+    world.claim(nonce="n1", boot="boot-before")
+
+
+def _live_holder_died(world):
+    world.alive.discard(8008)
+
+
+@pytest.mark.parametrize(
+    "lease_ends",
+    [_claim_removed, _claim_unreadable, _claim_from_an_earlier_boot, _live_holder_died],
+)
+def test_a_provisional_session_becomes_current_once_its_lease_ends(world, lease_ends):
+    # A36: nobody held the name since, so with no lease in force the next hook makes it
+    # current. The live claim's holder is a nested session of the name, which never held it.
+    if lease_ends is _live_holder_died:
+        world.bind(Caller("codex", 8008, "t-z", True, "walk", None))
+        world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="t-z")
+    else:
+        world.claim(nonce="n1")
+    assert world.bind(A).binding.state == "provisional"
+    lease_ends(world)
+    later = world.bind(A, source="resume")
+    assert (later.binding.state, later.binding.generation) == ("current", 1)
+
+
+def test_a_kept_out_holder_seen_at_a_new_pid_with_startup_stays_out(world):
+    # A40 (ruling 6): the count gate still holds when the pid and source force a decision.
+    kept_out(world)
+    again = world.bind(claude(1500, "s-a"), source="startup")
+    assert again.binding.state == "unbound"
+    assert again.superseded == ()
+    assert world.resolve(B).state == "current"
+
+
+def test_after_a_reboot_a_kept_out_session_stays_out_when_the_first_holder_dies(world):
+    # A49 (rulings 4, 6): the first holder of the new boot keeps the others out, alive or not.
+    world.bind(A)
+    world.boot = "boot-after"
+    world.alive.clear()
+    held = world.bind(claude(2500, "s-b"))
+    assert held.binding.state == "current"
+    world.alive.discard(2500)
+    restored = claude(1500, "s-a")
+    back = world.bind(restored, source="resume")
+    assert (back.binding.state, back.superseded) == ("unbound", ())
+    assert world.bind(restored, source="compact").binding.state == "unbound"
+    world.claim(nonce="n1", boot="boot-after")
+    assert world.adopt(restored, "n1").binding.state == "current"  # it returns by adopt
+
+
+@pytest.mark.parametrize(
+    ("caller", "launch", "source"),
+    [
+        (claude(1500, "s-a"), NO_NAME, "resume"),
+        (claude(1500, "s-a"), "ogham-worker", "fork"),
+        (Caller("claude", 1500, "s-a", True, "walk", None), "ogham-worker", "resume"),
+    ],
+    ids=["no name", "fork", "nested"],
+)
+def test_after_a_reboot_no_name_fork_and_nested_rules_still_apply(world, caller, launch, source):
+    # A50 (ruling 4): with no holder in the new boot, a restored session is decided again,
+    # and the no-name, fork and nesting rules come before the name's.
+    world.bind(A)
+    world.boot = "boot-after"
+    world.alive.clear()
+    found = world.bind(caller, launch=launch, source=source)
+    assert found.binding.state == "unbound"
+    assert found.superseded == ()
+    assert world.store.live_bindings(world.context()) == []
+
+
+@pytest.mark.parametrize("claim_state", ["pending", "live"])
+def test_after_a_reboot_a_session_restored_under_a_running_lease_is_provisional(world, claim_state):
+    # A51 (ruling 4): the old row is not the heir, so a lease of the new boot holds it out.
+    world.bind(A)
+    world.boot = "boot-after"
+    world.alive.clear()
+    if claim_state == "pending":
+        world.claim(nonce="n1", boot="boot-after")
+    else:  # a running session of the name that never held it holds the live claim
+        world.bind(Caller("codex", 8008, "t-z", True, "walk", None))
+        world.claim(
+            nonce="n1", boot="boot-after", state="live", expires=None, pane="w1:p1", session="t-z"
+        )
+    restored = world.bind(claude(1500, "s-a"), source="resume")
+    assert restored.binding.state == "provisional"
+    assert restored.superseded == ()
+
+
+def test_a_fresh_session_takes_a_name_its_kept_out_session_cannot(world):
+    # A52 (ruling 6): a genuinely fresh session id holds; the kept-out one stays out.
+    world.bind(A, launch=SCRATCH)
+    world.bind(A, launch=RENAMED, source="resume")
+    world.bind(B, launch=SCRATCH)
+    assert world.bind(A, launch=SCRATCH, source="resume").binding.state == "unbound"
+    fresh = world.bind(claude(1600, "s-a-fresh"), launch=SCRATCH)
+    assert (fresh.binding.state, fresh.binding.generation) == ("current", 3)
+    assert [old.session_id for old in fresh.superseded] == ["s-b"]
+    again = world.bind(A, launch=SCRATCH, source="resume")
+    assert (again.binding.state, again.superseded) == ("unbound", ())
+
+
+def test_a_known_pid_binding_reads_unverified_when_ps_is_unavailable(world):
+    # A56: a process table that can't be read leaves a known-pid binding unverified.
+    world.bind(A)
+
+    def denied():
+        raise identity.ProcessTableUnavailable("ps exited 1: operation not permitted")
+
+    context = replace(world.context(), alive=bindings.process_alive(denied))
+    (row,) = world.store.rows()
+    assert row.pid == 1001
+    assert bindings.liveness(row, context) == "unverified"
+    assert [found.session_id for found in world.store.live_bindings(context)] == ["s-a"]
+
+
+def test_a_pidless_successor_under_a_pidless_holders_live_lease_stays_provisional(world):
+    # A57 (recorded limit): no pid, so no process to share; the lease stays the holder's.
+    holder, successor = codex_tui("t-holder"), codex_tui("t-next")
+    world.claim(nonce="n1")
+    world.bind(holder)
+    world.adopt(holder, "n1")
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="t-holder")
+    assert world.bind(successor).binding.state == "provisional"
+    with pytest.raises(Refused):
+        world.adopt(successor, "n1")
+    assert world.resolve(successor).state == "provisional"
+    assert world.resolve(holder).state == "current"
+
+
+@pytest.mark.parametrize(("expires_in", "state"), [(0, "current"), (1, "provisional")])
+def test_a_pending_claim_that_expires_exactly_now_is_not_in_force(world, expires_in, state):
+    # A63: a pending claim is in force only while its expiry is still ahead.
+    world.claim(nonce="n1", expires=expiring_at(world.now + 1 + expires_in))  # bind ticks 1s
+    assert world.bind(A).binding.state == state
+
+
+def test_adopt_with_no_launch_name_is_refused(world):
+    # A68: a binding with no name has no lease to adopt.
+    world.bind(A, launch=NO_NAME)
+    world.claim(nonce="n1")
+    (before,) = world.store.rows()
+    with pytest.raises(Refused):
+        world.adopt(A, "n1")
+    assert world.store.rows() == [before]
+
+
+def _current(world):
+    world.bind(A)
+
+
+def _named_unbound(world):
+    world.bind(A)
+    world.bind(A, launch=RENAMED, source="resume")
+
+
+def _superseded(world):
+    world.bind(A)
+    world.bind(B)
+
+
+@pytest.mark.parametrize(
+    ("state", "setup"),
+    [("current", _current), ("unbound", _named_unbound), ("superseded", _superseded)],
+)
+def test_a_wrong_nonce_leaves_a_non_provisional_row_unchanged(world, state, setup):
+    # A74: only a provisional row is unbound by a nonce mismatch.
+    setup(world)
+    world.claim(nonce="n1")
+    before = world.store.rows()
+    assert world.resolve(A).state == state
+    with pytest.raises(Refused):
+        world.adopt(A, "n9")
+    assert world.store.rows() == before
+
+
+def test_a_kept_out_session_the_live_claim_names_keeps_the_lease_and_can_adopt_back(world):
+    # A79 (ruling 3; recorded limit): the live claim names A, so the lease stays A's.
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.bind(A, launch=RENAMED, source="resume")  # G2 unbinds A
+    world.bind(B)
+    world.adopt(B, "n1")  # B holds the name
+    world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    out = world.bind(A, source="resume")
+    assert (out.binding.state, out.binding.nonce) == ("unbound", None)  # kept out, nonce cleared
+    world.alive.discard(2002)  # B exits: only A keeps the lease in force now
+    outsider = claude(3003, "s-c")
+    assert world.bind(outsider).binding.state == "provisional"
+    back = world.adopt(A, "n1")
+    assert (back.binding.state, back.binding.nonce) == ("current", "n1")
+    assert {old.session_id for old in back.superseded} == {"s-b", "s-c"}
+
+
+def _touch_kept_out(world):
+    kept_out(world)
+    return A
+
+
+def _touch_fork(world):
+    world.bind(A)
+    fork = claude(3003, "s-fork")
+    world.bind(fork, source="fork")
+    return fork
+
+
+def _touch_provisional(world):
+    world.claim(nonce="n1")
+    world.bind(A)
+    return A
+
+
+def _touch_g2_unbound(world):
+    _named_unbound(world)
+    return A
+
+
+@pytest.mark.parametrize(
+    "setup", [_touch_kept_out, _touch_fork, _touch_provisional, _touch_g2_unbound]
+)
+def test_touch_on_a_noncurrent_binding_never_moves_the_clock(world, setup):
+    # A92 (ruling 1): touch moves last_seen only; a noncurrent binding is never seen bound.
+    caller = setup(world)
+    (before,) = [row for row in world.store.rows() if row.session_id == caller.session_id]
+    assert before.state != "current"
+    world.now += 100
+    world.store.touch(caller, world.context())
+    (after,) = [row for row in world.store.rows() if row.session_id == caller.session_id]
+    assert after == replace(before, last_seen=world.now)
+
+
+@pytest.mark.parametrize("leased", [False, True])
+def test_a_current_session_seen_at_a_new_pid_with_startup_keeps_its_generation(world, leased):
+    # A119: decided again, not continued; nobody held the name since, so it keeps its
+    # generation, and its own nonce as heir.
+    if leased:
+        world.claim(nonce="n1")
+        world.bind(A)
+        world.adopt(A, "n1")
+        world.claim(nonce="n1", state="live", expires=None, pane="w1:p1", session="s-a")
+    else:
+        world.bind(A)
+    world.alive.discard(1001)
+    again = world.bind(claude(1500, "s-a"), source="startup")
+    assert (again.binding.state, again.binding.generation) == ("current", 1)
+    assert again.binding.nonce == ("n1" if leased else None)
+    assert again.superseded == ()
+
+
+@pytest.mark.parametrize("launch", [NO_NAME, "ogham-lead"], ids=["no name", "other name"])
+def test_a_current_session_seen_at_a_new_pid_with_startup_follows_the_name_rules(world, launch):
+    # A120: with no launch name it is unbound and keeps its name; under another name it
+    # binds fresh there.
+    world.bind(A)
+    again = world.bind(claude(1500, "s-a"), launch=launch, source="startup")
+    if launch is NO_NAME:
+        assert (again.binding.state, again.binding.name) == ("unbound", "ogham-worker")
+    else:
+        found = again.binding
+        assert (found.state, found.name, found.generation) == ("current", "ogham-lead", 1)
+
+
+# Plan Appendix B: the review's rows that U1 pins (X1-X3, X7, X8, X10).
+
+
+def test_a_nameless_clear_with_no_lease_leaves_the_successor_free_to_bind_later(world):
+    # X1 (AT1): no lease passes through a nameless /clear, so an outsider takes the name,
+    # and the successor, named later, binds by newest-wins.
+    world.bind(A)  # generation 1
+    successor = claude(1001, "s-t")
+    cleared = world.bind(successor, launch=NO_NAME, source="clear")
+    assert (cleared.binding.state, cleared.binding.name) == ("unbound", None)
+    outsider = world.bind(claude(3003, "s-c"))
+    assert (outsider.binding.state, outsider.binding.generation) == ("current", 2)
+    named_later = world.bind(successor, source="resume")
+    assert (named_later.binding.state, named_later.binding.generation) == ("current", 3)
+    assert [old.session_id for old in named_later.superseded] == ["s-c"]
+
+
+@pytest.mark.parametrize("own_nonce", [False, True])
+def test_a_holder_redecided_under_another_nonces_lease_is_provisional(world, own_nonce):
+    # X2 (AT2): a G2-unbound holder whose names agree again is not the heir of a pending
+    # claim with another nonce, with or without its own earlier one.
+    if own_nonce:
+        world.claim(nonce="n1")
+        world.bind(A)
+        world.adopt(A, "n1")
+    else:
+        world.bind(A)
+    world.bind(A, launch=RENAMED, source="resume")
+    world.claim(nonce="n2")
+    again = world.bind(A, source="resume")
+    assert again.binding.state == "provisional"
+
+
+def test_a_session_renamed_back_under_another_nonces_lease_is_provisional(world):
+    # X3 (AT2): each move takes two starts: G2 unbinds, the next start decides the new name.
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    assert world.bind(A, launch="ogham-lead", source="resume").binding.state == "unbound"
+    away = world.bind(A, launch="ogham-lead", source="resume").binding
+    assert (away.name, away.state) == ("ogham-lead", "current")
+    world.claim(nonce="n2")
+    assert world.bind(A, source="resume").binding.state == "unbound"
+    back = world.bind(A, source="resume").binding
+    assert (back.name, back.state) == ("ogham-worker", "provisional")
+
+
+def test_a_session_the_nesting_barrier_left_unbound_is_never_kept_out(world):
+    # X7: the unknown-nesting barrier sets no hold count, so another holder in between
+    # keeps nobody out; once the walk-verified holder dies the session takes the name.
+    world.bind(A)  # generation 1
+    unknown = codex_without_ps("t-q")
+    assert world.bind(unknown).binding.state == "unbound"
+    world.bind(B)  # generation 2: someone else held the name since
+    assert world.bind(unknown, source="resume").binding.state == "unbound"  # B is verified
+    world.alive.discard(2002)
+    found = world.bind(unknown, source="resume")
+    assert (found.binding.state, found.binding.generation) == ("current", 3)
+    assert [old.session_id for old in found.superseded] == ["s-b"]
+
+
+def test_a_kept_out_session_resumed_into_another_holders_process_inherits_that_lease(world):
+    # X8: kept out of ogham-worker, A resumes into the pid of ogham-lead's holder under
+    # its live claim; "a /clear or /resume in the process that holds the lease keeps it".
+    kept_out(world)
+    holder = claude(5005, "s-h")
+    world.claim(name="ogham-lead", nonce="n-m")
+    world.bind(holder, launch="ogham-lead")
+    world.adopt(holder, "n-m")
+    world.claim(
+        name="ogham-lead", nonce="n-m", state="live", expires=None, pane="w1:p2", session="s-h"
+    )
+    moved = world.bind(claude(5005, "s-a"), launch="ogham-lead", source="resume")
+    found = moved.binding
+    assert (found.name, found.state, found.nonce, found.generation) == (
+        "ogham-lead",
+        "current",
+        "n-m",
+        2,
+    )
+    assert [old.session_id for old in moved.superseded] == ["s-h"]
+
+
+def test_a_resume_back_after_a_nameless_clear_stays_superseded(world):
+    # X10: the nameless successor holds the name unbound, so the replaced session's
+    # /resume back continues it, still superseded.
+    world.bind(A)
+    world.bind(claude(1001, "s-t"), launch=NO_NAME, source="clear")
+    assert world.resolve(A).state == "superseded"
+    back = world.bind(A, source="resume")
+    assert back.binding.state == "superseded"
+    assert world.store.live_bindings(world.context()) == []

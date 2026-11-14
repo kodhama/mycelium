@@ -437,3 +437,44 @@ def test_directory_with_a_data_folder_that_cant_be_searched_exits_3(
 def test_adopt_reads_the_clock_again_once_it_holds_the_write_lock(machine):
     # A claim can expire during the store's busy wait (lead review, GRO-50).
     assert cli._context().clock is time.time
+
+
+# U4c U1: characterization pins of today's behaviour at cae4d6d (GRO-74, plan Appendix A).
+
+
+def _stored(machine) -> list[bindings.Binding]:
+    store = bindings.open_bindings(machine.paths.bindings)
+    try:
+        return store.rows()
+    finally:
+        store.close()
+
+
+def _never(*args, **kwargs):
+    raise AssertionError("whoami must not do this")
+
+
+def test_whoami_reads_the_stored_binding_without_looking_at_launch_names(
+    machine, capsys, monkeypatch
+):
+    # A17: a rename between hooks goes unseen until the next SessionStart.
+    from mycelium import launch, pane
+
+    machine.bind("s-1")
+    monkeypatch.setenv("KODHAMA_AGENT", "ogham-lead")  # the session is now named otherwise
+    monkeypatch.setattr(launch, "resolve", _never)
+    monkeypatch.setattr(pane, "find_pane", _never)
+    assert run(capsys, "whoami") == (0, "ogham-worker\ngeneration 1\n", "")
+
+
+def test_whoami_never_rebinds_or_moves_the_clock(machine, capsys, monkeypatch):
+    # A87: whoami reads state: no rebind, no lease or nonce check, no clock refresh.
+    machine.bind("s-1")
+    before = _stored(machine)
+    monkeypatch.setattr(bindings.Bindings, "bind", _never)
+    monkeypatch.setattr(bindings.Bindings, "adopt", _never)
+    monkeypatch.setattr(bindings.Bindings, "touch", _never)
+    monkeypatch.setattr(lease, "read", _never)
+    for _ in range(3):
+        assert run(capsys, "whoami") == (0, "ogham-worker\ngeneration 1\n", "")
+    assert _stored(machine) == before
