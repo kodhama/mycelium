@@ -618,21 +618,18 @@ and the lease stay on the rows until U3, and keep-out until U4.
     rows. The first release that ships the hooks (hub U8) ends it, and the
     reset step is removed then; later schema changes migrate or refuse. U3 and U4 each bump the version again,
     each with a reset test from the version before.
-- **Known limit until U3 merges: continuing resume** [F4]. In the lease
-  holder's process, a `/resume` with a launch name onto a session whose
-  binding continues (kept out, a fork's, a nested one's, or current or
-  superseded under another name) re-confirms that binding. That supersedes
-  the holder, and an outside session can then bind current without the
-  nonce. The 2026-11-14 limit-labels entry described this behaviour ("A
-  launch name keeps the lease less often than the text says"). The PM ruled
-  it "not accepted as a limit": it is the lease bypass the plan's attack
-  flagged as P1 (GRO-73, 2026-11-14). U3 closes it, so that "only the
-  holder, or a session that presents the nonce, can supersede", with a U3
-  acceptance test, and until then it is recorded here. The plan at
-  `69a9549` does not yet say how: its lease gate (KC5) covers only the
-  paths that make a session current, and its decision order still
-  supersedes the caller's other sessions of its process whatever the result
-  (A30). This slice doesn't change it.
+- **Known limit until U3 merges: continuing resume** [F4]. **F4 is open: a
+  non-heir's `/resume` in the holder's process supersedes the holder and
+  lets the name's lease lapse.** That is a `/resume` with a launch name onto
+  a session whose binding continues (kept out, a fork's, a nested one's, or
+  current or superseded under another name): it re-confirms that binding,
+  which supersedes the holder, and an outside session can then bind current
+  without the nonce. The 2026-11-14 limit-labels entry described this
+  behaviour ("A launch name keeps the lease less often than the text
+  says"). The PM ruled it not an accepted limit but the lease bypass the
+  plan's attack flagged as P1 (GRO-73, 2026-11-14 and 2026-11-15): U3
+  closes it, at a plan revision still to be set, and the own-process
+  supersede (A30) stands. This slice doesn't change it.
 - **No other rule changes.** Every pin U1 added passes unchanged, and
   existing tests changed only where they read a moved field or call the
   directory with the name records.
