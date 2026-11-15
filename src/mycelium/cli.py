@@ -117,12 +117,13 @@ def _directory(args: argparse.Namespace) -> int:
     index = _index(resolved)
     context = _context()  # without the boot id, every binding would read dead
     rows: list[bindings.Binding] = []
+    records: list[bindings.NameRecord] = []
     if _bindings_exist(resolved):
         with _opened(resolved) as store:
-            rows = store.rows()
+            rows, records = store.rows(), store.names()
     try:
         with directory.unhandled_in(resolved.store) as unhandled:
-            listed = directory.rows(index, rows, context, unhandled)
+            listed = directory.rows(index, rows, records, context, unhandled)
     except (StoreRefused, sqlite3.Error, OSError) as error:
         raise _Unavailable(f"the message store can't be read: {error}") from None
     print(json.dumps({"names": [row.to_json() for row in listed]}))

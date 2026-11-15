@@ -12,7 +12,8 @@ bindings, and never stored:
   7 days with nothing unhandled in its mailbox.
 
 The names are every name the index declares, every held name, and every name
-a binding carries. A provisional binding gives no delivery (KTD6), so it does
+with a record in the bindings (U4c KC1), so a name its bindings renamed away
+from stays listed. A provisional binding gives no delivery (KTD6), so it does
 not make a name live. A name can be knocked only while live: Claude through
 the SendMessage hint, Codex through its queue (KTD9).
 """
@@ -23,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from mycelium.bindings import Binding, Context, iso, liveness
+from mycelium.bindings import Binding, Context, NameRecord, iso, liveness
 from mycelium.index import Index
 from mycelium.store import Store, files, open_store
 
@@ -63,18 +64,28 @@ class Row:
 def rows(
     index: Index,
     bound: Iterable[Binding],
+    records: Iterable[NameRecord],
     context: Context,
     unhandled: Unhandled = lambda name: False,
 ) -> list[Row]:
-    """One row per name, sorted by name."""
+    """One row per name, sorted by name, from the bindings and their name records."""
     by_name: dict[str, list[Binding]] = {}
     for binding in bound:
         if binding.name is not None:
             by_name.setdefault(binding.name, []).append(binding)
+    recorded = {record.name: record for record in records}
     declared = index.names()
-    names = declared | {hold.name for hold in index.holds()} | set(by_name)
+    names = declared | {hold.name for hold in index.holds()} | set(by_name) | set(recorded)
     return [
-        _row(name, name in declared, index, by_name.get(name, []), context, unhandled)
+        _row(
+            name,
+            name in declared,
+            index,
+            by_name.get(name, []),
+            recorded.get(name),
+            context,
+            unhandled,
+        )
         for name in sorted(names)
     ]
 
@@ -108,12 +119,13 @@ def _row(
     declared: bool,
     index: Index,
     bound: list[Binding],
+    record: NameRecord | None,
     context: Context,
     unhandled: Unhandled,
 ) -> Row:
     live = next((b for b in bound if b.state == "current" and liveness(b, context) != "dead"), None)
     shown = live or _latest(b for b in bound if b.state == "current") or _latest(bound)
-    deliverability = _deliverability(name, declared, index, live, bound, context, unhandled)
+    deliverability = _deliverability(name, declared, index, live, record, context, unhandled)
     can = deliverability == "live"
     return Row(
         name=name,
@@ -132,7 +144,7 @@ def _deliverability(
     declared: bool,
     index: Index,
     live: Binding | None,
-    bound: list[Binding],
+    record: NameRecord | None,
     context: Context,
     unhandled: Unhandled,
 ) -> str:
@@ -150,22 +162,23 @@ def _deliverability(
     # for a name never held, since it was first seen (lead ruling, GRO-50).
     if live:
         return "live"
-    last = _clock_start(bound)
+    last = _clock_start(record)
     if last is not None and context.now - last >= UNDECLARED_GONE_SECONDS:
         if not unhandled(name):
             return "gone"
     return "queue-only"
 
 
-def _clock_start(bound: list[Binding]) -> float | None:
+def _clock_start(record: NameRecord | None) -> float | None:
     """When an undeclared name was last seen held, or, if never, first seen (R37).
 
-    A binding never current under the name doesn't move the clock, so a fork or
-    a session with no launch name can't keep the name from going."""
-    held = [b.bound_seen for b in bound if b.bound_seen is not None]
-    if held:
-        return max(held)
-    return min((b.bound_at for b in bound), default=None)
+    Both are read from the name's record, never from the rows that carry the
+    name now, so a rename can't erase them (U4c KC1). A binding never current
+    under the name doesn't move the clock, so a fork or a session with no
+    launch name can't keep the name from going."""
+    if record is None:
+        return None
+    return record.bound_seen if record.bound_seen is not None else record.first_bound_at
 
 
 def _latest(bound: Iterable[Binding]) -> Binding | None:

@@ -24,9 +24,18 @@ from mycelium.store.interface import StoreRefused
 
 
 def open_database(
-    path: Path, *, schema: Sequence[str], version: int, busy_timeout: float
+    path: Path,
+    *,
+    schema: Sequence[str],
+    version: int,
+    busy_timeout: float,
+    reset: Sequence[str] = (),
 ) -> sqlite3.Connection:
     """Open the database at `path`, creating its folders, file and schema if needed.
+
+    `reset` runs first for a file of an older version (not a new one), in the
+    same write transaction as the schema: the bindings drop their tables there,
+    since no released mycelium wrote binding rows (docs/decisions/bindings.md).
 
     Raises StoreRefused for a symlink found as it opens, a file newer than
     `version`, or a file that cannot use WAL."""
@@ -45,7 +54,7 @@ def open_database(
         # Again for a file SQLite just created, before anything is written:
         # it is empty until the schema.
         check_files(path, tighten=True)
-        _create_schema(db, schema, version)
+        _create_schema(db, schema, version, reset)
         _use_wal(db, busy_timeout)
         db.execute("PRAGMA synchronous=NORMAL")
         db.execute("PRAGMA fullfsync=OFF")
@@ -69,7 +78,9 @@ def write(db: sqlite3.Connection) -> Iterator[None]:
     db.execute("COMMIT")
 
 
-def _create_schema(db: sqlite3.Connection, schema: Sequence[str], version: int) -> None:
+def _create_schema(
+    db: sqlite3.Connection, schema: Sequence[str], version: int, reset: Sequence[str]
+) -> None:
     # A current file needs no lock, so an open never waits behind a writer.
     if checked(_user_version(db), version) == version:
         return
@@ -77,7 +88,10 @@ def _create_schema(db: sqlite3.Connection, schema: Sequence[str], version: int) 
     # the write lock before anything is created, and the version is read
     # again under it, so they create it in turn.
     with write(db):
-        if checked(_user_version(db), version) < version:
+        found = checked(_user_version(db), version)
+        if found < version:
+            for statement in reset if found else ():
+                db.execute(statement)
             for statement in schema:
                 db.execute(statement)
             db.execute(f"PRAGMA user_version={version}")

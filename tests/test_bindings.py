@@ -632,7 +632,8 @@ def test_touch_refreshes_last_seen_and_changes_nothing_else(world):
     touched = world.store.touch(A, world.context())
     assert touched.state == "current"
     (row,) = world.store.rows()
-    assert row == replace(first, last_seen=world.now, bound_seen=world.now)  # seen bound
+    assert row == replace(first, last_seen=world.now)
+    assert world.store.names()[0].bound_seen == world.now  # seen bound
     assert touched.binding == row
 
 
@@ -1411,8 +1412,10 @@ def test_touch_on_a_noncurrent_binding_never_moves_the_clock(world, setup):
     assert after == replace(before, last_seen=world.now)
     world.now = started + 7 * DAY
     undeclared = Index({}, {}, {})  # the directory reads ogham-worker as undeclared
-    listed = directory.rows(undeclared, world.store.rows(), world.context(), lambda name: False)
-    assert {row.name: row.deliverability for row in listed}["ogham-worker"] == "gone"
+    found = directory.rows(
+        undeclared, world.store.rows(), world.store.names(), world.context(), lambda name: False
+    )
+    assert {row.name: row.deliverability for row in found}["ogham-worker"] == "gone"
 
 
 @pytest.mark.parametrize("leased", [False, True])
@@ -1538,3 +1541,157 @@ def test_a_resume_back_after_a_nameless_clear_stays_superseded(world):
     back = world.bind(A, source="resume")
     assert back.binding.state == "superseded"
     assert world.store.live_bindings(world.context()) == []
+
+
+# U4c U2: the name record, the R37 clock and the schema reset (plan U2, KC1, KC7, KC8).
+
+UNDECLARED = Index({}, {}, {})
+DAY = 24 * 60 * 60
+
+
+def names(world) -> dict:
+    return {record.name: record for record in world.store.names()}
+
+
+def listed(world) -> dict[str, str]:
+    found = directory.rows(
+        UNDECLARED, world.store.rows(), world.store.names(), world.context(), lambda name: False
+    )
+    return {row.name: row.deliverability for row in found}
+
+
+def _rename_away(world, caller, to="other-probe"):
+    """A current session's herdr name changes: G2 unbinds it, then it binds under `to`."""
+    world.bind(caller, launch=RENAMED, source="resume")
+    moved = world.bind(caller, launch=to, source="resume")
+    assert (moved.binding.name, moved.binding.state) == (to, "current")
+
+
+def test_an_undeclared_names_clock_survives_its_only_holder_renaming_away(world):
+    # A116: the name has no binding left, but its record keeps it listed until 7 days
+    # after it was last held.
+    world.bind(A, launch="scratch-probe")
+    held = world.now
+    _rename_away(world, A)
+    assert listed(world)["scratch-probe"] == "queue-only"
+    world.now = held + 7 * DAY - 1
+    assert listed(world)["scratch-probe"] == "queue-only"
+    world.now = held + 7 * DAY
+    assert listed(world)["scratch-probe"] == "gone"
+
+
+def test_an_undeclared_names_clock_keeps_its_last_holder_after_a_rename(world):
+    # A117: an old fork that never held the name stays behind, but the clock runs from the
+    # name's bound_seen, the last time the holder was seen current.
+    world.bind(claude(3003, "s-fork"), launch="scratch-probe", source="fork")
+    world.now += 5 * DAY
+    world.bind(A, launch="scratch-probe")
+    held = world.now
+    _rename_away(world, A)
+    world.now = held + 7 * DAY - 1
+    assert listed(world)["scratch-probe"] == "queue-only"
+    world.now = held + 7 * DAY
+    assert listed(world)["scratch-probe"] == "gone"
+
+
+def test_a_name_declared_later_reads_declared_at_its_next_session_start(world):
+    # AT7 (KC9): declared lives on the name record, rewritten at every SessionStart that
+    # carries the name.
+    assert world.bind(A, launch="scratch-probe").binding.declared is False
+    world.declared.add("scratch-probe")
+    assert world.bind(A, launch="scratch-probe", source="resume").binding.declared is True
+    assert world.resolve(A).binding.declared is True
+    assert names(world)["scratch-probe"].declared is True
+
+
+def test_a_names_bound_seen_moves_only_on_a_current_write_and_first_bound_at_never(world):
+    # I5: bound_seen moves on every write of a current row, touch included, and on no
+    # other write; first_bound_at is set when the record is made and never moves.
+    fork = claude(3003, "s-fork")
+    world.bind(fork, source="fork")
+    first = world.now
+    assert (
+        names(world)["ogham-worker"].first_bound_at,
+        names(world)["ogham-worker"].bound_seen,
+    ) == (
+        first,
+        None,
+    )
+    world.bind(A)
+    assert names(world)["ogham-worker"].bound_seen == world.now
+    world.now += 10
+    world.store.touch(A, world.context())
+    assert names(world)["ogham-worker"].bound_seen == world.now
+    world.bind(B)  # supersedes A
+    seen = world.now
+    assert names(world)["ogham-worker"].bound_seen == seen
+    for caller in (A, fork):  # superseded, and a fork: neither is current
+        world.now += 10
+        world.store.touch(caller, world.context())
+    world.bind(fork, source="fork")
+    record = names(world)["ogham-worker"]
+    assert (record.first_bound_at, record.bound_seen) == (first, seen)
+
+
+@pytest.mark.parametrize("call", ["bind", "touch"])
+def test_bind_and_touch_read_the_time_once_they_hold_the_write_lock(world, call):
+    # KC8: as adopt does, the time written is the one read after the busy wait.
+    world.bind(A)
+    world.alive.add(A.pid)
+    later = world.now + 50
+    locked = []
+
+    def clock() -> float:
+        locked.append(world.store._db.in_transaction)
+        return later
+
+    context = replace(world.context(), clock=clock)
+    if call == "bind":
+        world.store.bind(Event("resume", A, named("ogham-worker")), context)
+    else:
+        world.store.touch(A, context)
+    assert locked == [True]
+    (row,) = world.store.rows()
+    assert (row.last_seen, names(world)["ogham-worker"].bound_seen) == (later, later)
+
+
+_SCHEMA_1 = (
+    """CREATE TABLE bindings (
+        harness TEXT NOT NULL, session_id TEXT NOT NULL, name TEXT, declared INTEGER NOT NULL,
+        pid INTEGER, evidence TEXT NOT NULL, boot TEXT NOT NULL, generation INTEGER,
+        state TEXT NOT NULL, reason TEXT, nonce TEXT, bound_at REAL NOT NULL,
+        last_seen REAL NOT NULL, seen_holds INTEGER, bound_seen REAL,
+        PRIMARY KEY (harness, session_id)
+    )""",
+    "CREATE INDEX bindings_by_name ON bindings (name)",
+    """CREATE TABLE generations (
+        name TEXT PRIMARY KEY, generation INTEGER NOT NULL,
+        holds INTEGER NOT NULL DEFAULT 0, held_boot TEXT
+    )""",
+    "INSERT INTO bindings VALUES ('claude', 's-a', 'ogham-worker', 1, 1001, 'walk', 'boot-now',"
+    " 3, 'current', NULL, NULL, 0, 0, 1, 0)",
+    "INSERT INTO generations VALUES ('ogham-worker', 3, 1, 'boot-now')",
+    "PRAGMA user_version=1",
+)
+
+
+def test_a_version_one_bindings_file_opens_as_version_two_with_empty_tables(tmp_path):
+    # KC7: no released mycelium wrote binding rows, so an older file is reset, not migrated.
+    import sqlite3
+
+    path = tmp_path / "bindings.sqlite3"
+    with sqlite3.connect(path) as raw:
+        for statement in _SCHEMA_1:
+            raw.execute(statement)
+    store = bindings.open_bindings(path)
+    try:
+        assert (store.rows(), store.names()) == ([], [])
+        tables = {
+            found
+            for (found,) in store._db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert tables == {"bindings", "names"}
+        assert store._db.execute("PRAGMA user_version").fetchone() == (2,)
+    finally:
+        store.close()
+    assert bindings.SCHEMA_VERSION == 2

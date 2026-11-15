@@ -15,6 +15,7 @@ from mycelium.store import (
     SCHEMA_VERSION,
     CursorConflict,
     StoreRefused,
+    files,
     open_store,
 )
 
@@ -540,3 +541,46 @@ def test_an_existing_read_only_store_is_tightened_before_it_is_opened(tmp_path):
     store.append("role-01", "hello")
     store.close()
     assert path.stat().st_mode & 0o777 == 0o600
+
+
+# KC7 (U4c U2): an opener may pass a reset, run for an older file in the schema's transaction.
+
+_TINY = ("CREATE TABLE IF NOT EXISTS t (a INTEGER, b INTEGER)",)
+_RESET = ("DROP TABLE IF EXISTS t",)
+
+
+def _open_tiny(path, version, reset=()):
+    return files.open_database(path, schema=_TINY, version=version, busy_timeout=1, reset=reset)
+
+
+def _columns(db):
+    return [row[1] for row in db.execute("PRAGMA table_info(t)")]
+
+
+def test_an_older_file_is_reset_before_its_schema_is_made_again(tmp_path):
+    path = tmp_path / "tiny.sqlite3"
+    with closing(sqlite3.connect(path)) as raw:
+        raw.execute("CREATE TABLE t (a INTEGER)")  # version 1's shape: no column b
+        raw.execute("INSERT INTO t VALUES (1)")
+        raw.execute("PRAGMA user_version=1")
+        raw.commit()
+    with closing(_open_tiny(path, 2, _RESET)) as db:
+        assert (_columns(db), db.execute("SELECT * FROM t").fetchall()) == (["a", "b"], [])
+        assert db.execute("PRAGMA user_version").fetchone() == (2,)
+
+
+def test_a_reset_never_runs_on_a_new_or_current_file(tmp_path):
+    path = tmp_path / "tiny.sqlite3"
+    with closing(_open_tiny(path, 2, _RESET)) as db:  # new: version 0
+        db.execute("INSERT INTO t VALUES (1, 2)")
+    with closing(_open_tiny(path, 2, _RESET)) as db:  # current
+        assert db.execute("SELECT * FROM t").fetchall() == [(1, 2)]
+
+
+def test_without_a_reset_an_older_file_keeps_its_rows(tmp_path):
+    # The message store passes none: its file keeps what it holds.
+    path = tmp_path / "tiny.sqlite3"
+    with closing(_open_tiny(path, 1)) as db:
+        db.execute("INSERT INTO t VALUES (1, 2)")
+    with closing(_open_tiny(path, 2)) as db:
+        assert db.execute("SELECT * FROM t").fetchall() == [(1, 2)]

@@ -53,8 +53,13 @@ def nothing_unhandled(name: str) -> bool:
     return False
 
 
+def stored(world):
+    """The bindings and the name records, as the directory takes them."""
+    return world.store.rows(), world.store.names()
+
+
 def table(world, index=INDEX, unhandled=nothing_unhandled):
-    found = directory.rows(index, world.store.rows(), world.context(), unhandled)
+    found = directory.rows(index, *stored(world), world.context(), unhandled)
     return {row.name: row for row in found}
 
 
@@ -162,7 +167,7 @@ def test_every_declared_held_and_bound_name_is_listed_once(world):
     world.bind(claude(1002, "s-2"), launch="w-running")
     world.bind(claude(1003, "s-3"), launch="w-running")  # the name, twice: listed once
     world.bind(claude(1004, "s-4"), launch=Launch(None, "no launch name", {}, "none"))
-    names = [row.name for row in directory.rows(INDEX, world.store.rows(), world.context())]
+    names = [row.name for row in directory.rows(INDEX, *stored(world), world.context())]
     assert names == sorted(["w-running", "w-parked", "w-done", "w-held", "scratch-probe"])
 
 
@@ -172,7 +177,7 @@ def test_the_declared_names_are_read_once_per_directory(world, monkeypatch):
     calls = []
     names = Index.names
     monkeypatch.setattr(Index, "names", lambda self: calls.append(1) or names(self))
-    directory.rows(INDEX, world.store.rows(), world.context())
+    directory.rows(INDEX, *stored(world), world.context())
     assert len(calls) == 1
 
 
@@ -201,7 +206,7 @@ def test_the_directory_reads_the_index_as_refresh_builds_it(world, tree):
     shutil.rmtree(found.root / "hq/mq/repos/engine")
     index = refresh(found.paths, read=found.read, now=2000.0).index
     world.now = 2000.0
-    rows = {row.name: row for row in directory.rows(index, [], world.context())}
+    rows = {row.name: row for row in directory.rows(index, [], [], world.context())}
     assert set(rows) == set(first.index.names())
     assert rows["mq-pm"].deliverability == "absent"
     assert rows["mq-roadmap-assistant"].deliverability == "queue-only"
@@ -259,8 +264,7 @@ def test_the_message_store_is_opened_once_per_directory(world, tmp_path, monkeyp
     monkeypatch.setattr(directory, "open_store", lambda p: opened.append(p) or open_store(p))
     with directory.unhandled_in(path) as found:
         rows = {
-            row.name: row
-            for row in directory.rows(INDEX, world.store.rows(), world.context(), found)
+            row.name: row for row in directory.rows(INDEX, *stored(world), world.context(), found)
         }
     assert rows["probe-a"].deliverability == rows["probe-b"].deliverability == "gone"
     assert opened == [path]
@@ -449,3 +453,16 @@ def test_the_directory_shows_the_live_then_the_latest_current_then_the_latest_bi
     assert {"harness": row.harness, "state": row.state, "generation": row.generation} == shown
     latest = max(b.last_seen for b in world.store.rows() if b.name == "w-running")
     assert row.last_seen == directory.iso(latest)
+
+
+def test_a_never_held_names_clock_keeps_its_first_bound_at_after_a_rename(world):
+    # N1: the earliest row that carried the name, never current, renames away on day 8.
+    # The clock ran from the name's first_bound_at, so the name stays gone.
+    world.bind(claude(1001, "s-early"), launch="scratch-probe", source="fork")
+    world.now += 3 * DAY
+    world.bind(claude(1002, "s-later"), launch="scratch-probe", source="fork")
+    world.now += 5 * DAY
+    assert table(world)["scratch-probe"].deliverability == "gone"
+    moved = world.bind(claude(1009, "s-early"), launch="other-probe", source="fork")
+    assert moved.binding.name == "other-probe"
+    assert table(world)["scratch-probe"].deliverability == "gone"
