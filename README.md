@@ -270,8 +270,9 @@ writes anything, so the store's data, a WAL left by a crash included, stays
 as it was.
 
 **A bindings file from an older mycelium starts empty.** No release has
-written binding rows yet, so an older file's tables are dropped and made
-again when it opens, rather than migrated
+written binding rows yet, so until the first release that ships the hooks,
+an older file's tables are dropped and made again when it opens, rather
+than migrated
 ([decision](docs/decisions/bindings.md)). A newer one is refused like the
 store.
 

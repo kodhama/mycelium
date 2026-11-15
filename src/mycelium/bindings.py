@@ -91,7 +91,8 @@ _SCHEMA = (
 _RESET = tuple(
     f"DROP TABLE IF EXISTS {table}" for table in ("bindings", "generations", "names", "sightings")
 )
-"""Every bindings table any schema version made: an older file starts empty (KC7).
+"""Every bindings table any schema version made, or U4 will make (`sightings`):
+an older file starts empty (KC7).
 
 Safe only while no released mycelium writes binding rows; the first release
 that ships the hooks (hub U8) ends it, and later versions migrate or refuse."""

@@ -585,9 +585,10 @@ and the lease stay on the rows until U3, and keep-out until U4.
 - **The directory lists every name with a record**, so a name whose
   sessions all moved to other names stays listed. This
   replaces "every name a binding carries" in the directory entry.
-- **`declared` lives on the record.** Every SessionStart decided or
-  re-confirmed under the name rewrites it from the index, and `adopt` leaves
-  it alone. So a name a cluster declares later reads
+- **`declared` lives on the record.** Every SessionStart that carries the
+  name as its launch name rewrites it from the index, whether it is decided
+  or re-confirmed under that name. One with no launch name, and `adopt`,
+  leave it alone. So a name a cluster declares later reads
   declared at its session's next SessionStart (AT7). Until now only a new
   or renamed row recomputed it. The directory still reads declared-ness from
   the index, not from this field.
@@ -598,8 +599,8 @@ and the lease stay on the rows until U3, and keep-out until U4.
   note on "held since" kept version 1 because the file was new and
   unreleased. That is still true, so an older file is emptied rather than
   migrated: in the transaction that makes the schema, every bindings table
-  this or a planned version makes is dropped (`bindings`, `generations`,
-  `names`, and `sightings`, which U4 adds). `files.open_database` takes that reset step, which runs only
+  any version made, or U4 will make, is dropped (`bindings` and
+  `generations` from version 1, `names`, and `sightings`, which U4 adds). `files.open_database` takes that reset step, which runs only
   for a file of an older version, never a new one. The message store passes
   none. A newer file is still refused before any write.
   - **Why reset:** no user can have binding rows. The only release,
