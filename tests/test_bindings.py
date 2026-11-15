@@ -1682,3 +1682,56 @@ def test_a_version_one_bindings_file_opens_as_version_two_with_empty_tables(tmp_
     finally:
         store.close()
     assert bindings.SCHEMA_VERSION == 2
+
+
+def test_a_continuing_start_under_another_name_makes_no_record_for_it(world):
+    # The record is made by a SessionStart decided under the name, not by one that
+    # re-confirms a session still bound to another name (G2 unbinds it there).
+    world.bind(A, launch="scratch-probe")
+    world.bind(A, launch="other-probe", source="resume")
+    assert world.resolve(A).binding.name == "scratch-probe"
+    assert set(names(world)) == {"scratch-probe"}
+
+
+def test_a_superseded_report_carries_the_names_declared_as_rewritten(world):
+    # The rows a SessionStart supersedes are read after it rewrote the name's record:
+    # here a provisional successor supersedes its provisional predecessor (A30).
+    world.claim(name="scratch-probe", nonce="n1")
+    assert world.bind(A, launch="scratch-probe").binding.state == "provisional"
+    world.declared.add("scratch-probe")
+    done = world.bind(claude(1001, "s-c"), launch="scratch-probe", source="clear")
+    assert done.binding.state == "provisional"
+    assert [(old.session_id, old.declared) for old in done.superseded] == [("s-a", True)]
+
+
+def test_adopt_moves_bound_seen_and_a_g2_unbind_does_not(world):
+    # I5 for the two other writers: adoption writes a current row, a G2 unbind doesn't.
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    assert names(world)["ogham-worker"].bound_seen == world.now
+    adopted = world.now
+    world.bind(A, launch=RENAMED, source="resume")
+    assert world.resolve(A).state == "unbound"
+    assert names(world)["ogham-worker"].bound_seen == adopted
+
+
+def test_the_directory_reads_rows_and_records_in_one_snapshot(world, monkeypatch):
+    # A bind that commits between the two reads must not pair old rows with new records.
+    world.bind(A, launch="scratch-probe")
+    other = bindings.open_bindings(world.path)
+    rows = bindings.Bindings.rows
+
+    def rows_then_a_bind(store):
+        found = rows(store)
+        event = Event("startup", B, named("late-probe"))
+        other.bind(event, world.context())
+        return found
+
+    monkeypatch.setattr(bindings.Bindings, "rows", rows_then_a_bind)
+    try:
+        found, records = world.store.listing()
+    finally:
+        other.close()
+    assert [row.name for row in found] == ["scratch-probe"]
+    assert [record.name for record in records] == ["scratch-probe"]

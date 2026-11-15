@@ -546,7 +546,7 @@ def test_an_existing_read_only_store_is_tightened_before_it_is_opened(tmp_path):
 # KC7 (U4c U2): an opener may pass a reset, run for an older file in the schema's transaction.
 
 _TINY = ("CREATE TABLE IF NOT EXISTS t (a INTEGER, b INTEGER)",)
-_RESET = ("DROP TABLE IF EXISTS t",)
+_RESET = ("DROP TABLE IF EXISTS t", "CREATE TABLE reset_ran (x INTEGER)")
 
 
 def _open_tiny(path, version, reset=()):
@@ -584,3 +584,33 @@ def test_without_a_reset_an_older_file_keeps_its_rows(tmp_path):
         db.execute("INSERT INTO t VALUES (1, 2)")
     with closing(_open_tiny(path, 2)) as db:
         assert db.execute("SELECT * FROM t").fetchall() == [(1, 2)]
+
+
+def _reset_ran(db):
+    found = db.execute("SELECT name FROM sqlite_master WHERE name = 'reset_ran'").fetchall()
+    return found != []
+
+
+def test_the_reset_runs_only_for_an_older_file(tmp_path):
+    new, current, older = (tmp_path / f"{n}.sqlite3" for n in ("new", "current", "older"))
+    with closing(_open_tiny(new, 2, _RESET)) as db:  # version 0: nothing to reset
+        assert not _reset_ran(db)
+    _open_tiny(current, 2).close()
+    with closing(_open_tiny(current, 2, _RESET)) as db:
+        assert not _reset_ran(db)
+    _open_tiny(older, 1).close()
+    with closing(_open_tiny(older, 2, _RESET)) as db:
+        assert _reset_ran(db)
+
+
+def test_a_reset_is_undone_when_the_schema_after_it_fails(tmp_path):
+    # One transaction: a schema that fails leaves the older file as it was.
+    path = tmp_path / "tiny.sqlite3"
+    with closing(_open_tiny(path, 1)) as db:
+        db.execute("INSERT INTO t VALUES (1, 2)")
+    broken = (*_TINY, "CREATE TABLE broken (")
+    with pytest.raises(sqlite3.OperationalError):
+        files.open_database(path, schema=broken, version=2, busy_timeout=1, reset=_RESET)
+    with closing(sqlite3.connect(path)) as raw:
+        assert raw.execute("SELECT * FROM t").fetchall() == [(1, 2)]
+        assert raw.execute("PRAGMA user_version").fetchone() == (1,)

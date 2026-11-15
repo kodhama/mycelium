@@ -120,7 +120,7 @@ def _directory(args: argparse.Namespace) -> int:
     records: list[bindings.NameRecord] = []
     if _bindings_exist(resolved):
         with _opened(resolved) as store:
-            rows, records = store.rows(), store.names()
+            rows, records = store.listing()
     try:
         with directory.unhandled_in(resolved.store) as unhandled:
             listed = directory.rows(index, rows, records, context, unhandled)
@@ -188,6 +188,9 @@ def _context(claims: Callable[[str], lease.Claim] | None = None) -> bindings.Con
     return bindings.Context(
         boot=found,
         now=time.time(),
+        # Enough for whoami, adopt and directory, none of which writes `declared`. A
+        # `bind` context must read the index instead: bind rewrites the name record's
+        # `declared` from it at every SessionStart (KC9).
         declared=lambda name: False,
         claim=claims or (lambda name: lease.Claim("none")),
         alive=bindings.process_alive(identity.process_table),

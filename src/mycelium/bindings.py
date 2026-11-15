@@ -330,6 +330,16 @@ class Bindings:
         found = self._db.execute(f"SELECT {_FIELDS} FROM {_ROWS} ORDER BY b.bound_at, b.rowid")
         return [_binding(row) for row in found]
 
+    def listing(self) -> tuple[list[Binding], list[NameRecord]]:
+        """The rows and the name records, read in one snapshot, as the directory needs
+        them: a bind that commits between two separate reads could pair old rows with
+        newer records."""
+        self._db.execute("BEGIN")
+        try:
+            return self.rows(), self.names()
+        finally:
+            self._db.execute("COMMIT")
+
     def names(self) -> list[NameRecord]:
         """Every name record, by name. A name keeps its record after its rows move on."""
         found = self._db.execute(
@@ -510,7 +520,6 @@ class Bindings:
 
     def _decide(self, row: Binding | None, event: Event, context: Context) -> Bound:
         caller, name = event.caller, event.launch.name
-        own = self._same_process(caller, context)
         # A generation belongs to its name: a row decided under another name drops it.
         # With no launch name, the row keeps its own name, so a session that re-runs
         # its hook while its names disagree neither loses its generation nor forgets
@@ -521,6 +530,7 @@ class Bindings:
         declared = row.declared if same else False
         if name is not None:
             declared = self._record(name, context)
+        own = self._same_process(caller, context)  # read after the record's rewrite
         # bound_at says since when the session is bound to this name.
         renamed = row is None or row.name != decided_name
         found = Binding(

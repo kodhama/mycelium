@@ -238,8 +238,8 @@ Deliverability is `live`, `absent`, `queue-only`, `held` or `gone`, computed
 from the clusters and the bindings each time. A name can be knocked only while live.
 
 - **A name declared in no cluster is live only with a live current
-  binding**; a provisional one doesn't count. It is gone 7 days after a
-  session last held it, or, if none ever did, 7 days after one first
+  binding**; a provisional one doesn't count. With no hold, it is gone 7
+  days after a session last held it, or, if none ever did, 7 days after one first
   carried it, unless mail waits. Each name keeps one record of those times,
   so a session that moves to another name doesn't reset them, and the name
   stays listed.
