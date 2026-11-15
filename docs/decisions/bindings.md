@@ -585,11 +585,12 @@ and the lease stay on the rows until U3, and keep-out until U4.
 - **The directory lists every name with a record**, so a name whose
   sessions all moved to other names stays listed. This
   replaces "every name a binding carries" in the directory entry.
-- **`declared` lives on the record.** Every SessionStart that carries the
-  name as its launch name rewrites it from the index, whether it is decided
-  or re-confirmed under that name. One with no launch name, and `adopt`,
-  leave it alone. So a name a cluster declares later reads
-  declared at its session's next SessionStart (AT7). Until now only a new
+- **`declared` lives on the record.** A SessionStart rewrites it from the
+  index when the session ends up under its launch name: decided under that
+  name, or re-confirmed under it. One with no launch name, one that
+  re-confirms a session still bound to another name, and `adopt` leave
+  every record's `declared` alone. So a name a cluster declares later reads
+  declared at its session's next SessionStart under that name (AT7). Until now only a new
   or renamed row recomputed it. The directory still reads declared-ness from
   the index, not from this field.
 - **`bind` and `touch` read the time once they hold the write lock**, as
