@@ -34,8 +34,7 @@ def open_database(
     """Open the database at `path`, creating its folders, file and schema if needed.
 
     `reset` runs first for a file of an older version (not a new one), in the
-    same write transaction as the schema: the bindings drop their tables there,
-    since no released mycelium wrote binding rows (docs/decisions/bindings.md).
+    same write transaction as the schema.
 
     Raises StoreRefused for a symlink found as it opens, a file newer than
     `version`, or a file that cannot use WAL."""
@@ -90,8 +89,9 @@ def _create_schema(
     with write(db):
         found = checked(_user_version(db), version)
         if found < version:
-            for statement in reset if found else ():
-                db.execute(statement)
+            if found:  # a new file has nothing to reset
+                for statement in reset:
+                    db.execute(statement)
             for statement in schema:
                 db.execute(statement)
             db.execute(f"PRAGMA user_version={version}")

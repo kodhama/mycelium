@@ -2,6 +2,7 @@
 
 import json
 import os
+import sqlite3
 import stat
 import time
 from dataclasses import replace
@@ -745,8 +746,6 @@ def test_a_symlinked_bindings_file_is_refused(tmp_path):
 
 
 def test_a_bindings_file_from_a_newer_mycelium_is_refused(tmp_path):
-    import sqlite3
-
     path = tmp_path / "bindings.sqlite3"
     with sqlite3.connect(path) as raw:
         raw.execute(f"PRAGMA user_version={bindings.SCHEMA_VERSION + 1}")
@@ -1411,11 +1410,7 @@ def test_touch_on_a_noncurrent_binding_never_moves_the_clock(world, setup):
     (after,) = [row for row in world.store.rows() if row.session_id == caller.session_id]
     assert after == replace(before, last_seen=world.now)
     world.now = started + 7 * DAY
-    undeclared = Index({}, {}, {})  # the directory reads ogham-worker as undeclared
-    found = directory.rows(
-        undeclared, world.store.rows(), world.store.names(), world.context(), lambda name: False
-    )
-    assert {row.name: row.deliverability for row in found}["ogham-worker"] == "gone"
+    assert listed(world)["ogham-worker"] == "gone"  # read as undeclared
 
 
 @pytest.mark.parametrize("leased", [False, True])
@@ -1546,7 +1541,6 @@ def test_a_resume_back_after_a_nameless_clear_stays_superseded(world):
 # U4c U2: the name record, the R37 clock and the schema reset (plan U2, KC1, KC7, KC8).
 
 UNDECLARED = Index({}, {}, {})
-DAY = 24 * 60 * 60
 
 
 def names(world) -> dict:
@@ -1610,13 +1604,8 @@ def test_a_names_bound_seen_moves_only_on_a_current_write_and_first_bound_at_nev
     fork = claude(3003, "s-fork")
     world.bind(fork, source="fork")
     first = world.now
-    assert (
-        names(world)["ogham-worker"].first_bound_at,
-        names(world)["ogham-worker"].bound_seen,
-    ) == (
-        first,
-        None,
-    )
+    record = names(world)["ogham-worker"]
+    assert (record.first_bound_at, record.bound_seen) == (first, None)
     world.bind(A)
     assert names(world)["ogham-worker"].bound_seen == world.now
     world.now += 10
@@ -1677,8 +1666,6 @@ _SCHEMA_1 = (
 
 def test_a_version_one_bindings_file_opens_as_version_two_with_empty_tables(tmp_path):
     # KC7: no released mycelium wrote binding rows, so an older file is reset, not migrated.
-    import sqlite3
-
     path = tmp_path / "bindings.sqlite3"
     with sqlite3.connect(path) as raw:
         for statement in _SCHEMA_1:
