@@ -4,7 +4,8 @@ One row per (harness, session id), in an owner-only SQLite file in state
 (`bindings.sqlite3`), under the message store's file rules. The hook (U8 for
 Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
 `adopt`, `resolve_caller` (for `whoami`) and `authorize`; the directory reads
-`rows`. The rules are in docs/decisions/bindings.md. In short:
+`rows` and `names`, the one record per name that holds the name's own facts
+(U4c KC1). The rules are in docs/decisions/bindings.md. In short:
 
 - **Idempotent on the key** (KTD4): a SessionStart that continues a session
   (its hook re-run in the same process, or its resume or compaction in any

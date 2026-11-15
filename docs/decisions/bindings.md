@@ -547,3 +547,84 @@ earlier entries; they land here instead, since this record is append-only
   session of its process"). The 2026-11-10 exit-code entry's "a live claim
   another session holds" reads the same way. A claim naming a session of
   another process is refused whether that session still runs or not.
+
+## 2026-11-15 one record per name for the clock, and a schema reset (U4c U2, GRO-75)
+
+The second U4c slice (hub plan
+`areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `69a9549`, unit
+U2) moves the facts R37's clock needs off the session rows into one record
+per name, so writing a session row can't erase them. The holder, the nonce
+and the lease stay on the rows until U3, and keep-out until U4.
+
+- **The name record.** The `names` table replaces `generations`. It holds
+  `declared`, `generation` (the last one issued), `epoch` (the hold count,
+  until now `holds`), `held_boot`, `bound_seen` and `first_bound_at`. The
+  first SessionStart that carries a name makes its record, a fork's or a
+  provisional one's included. Nothing deletes a record, so generations
+  still never repeat. Session rows drop `declared` and `bound_seen`. Each
+  row keeps `seen_holds`, now the name's `epoch` when the row last held the
+  name or went provisional for it, until U4 moves it to sightings. This
+  replaces "the pieces" entry's second table and the `generations` table in
+  the 2026-11-12 entry's "How" bullet.
+- **The clock reads the record.** Standing ruling 1 is unchanged: an
+  undeclared name with no hold and no live current binding is gone once 7
+  days have passed since a binding last held it, or, if none ever did,
+  since it was first seen, and nothing unhandled waits in its mailbox. Those
+  two times are now the record's `bound_seen` and `first_bound_at`.
+  `bound_seen` moves at every write of a current row, `touch` included, and
+  at no other write. `first_bound_at` never moves. This replaces the
+  2026-11-12 "How" bullet that read the clock from the latest `bound_seen`
+  among the name's rows, or their earliest `bound_at`. A rename now leaves
+  the clock as it was. Pinned: the only holder renames away and the name
+  goes 7 days after it last held it (A116); an old fork stays behind and the
+  clock still runs from the holder (A117); the earliest row renames away and
+  a name nobody held stays gone (N1).
+- **The directory lists every name with a record**, so a name whose
+  sessions all moved to other names stays listed. This
+  replaces "every name a binding carries" in the directory entry.
+- **`declared` lives on the record.** Every SessionStart that carries the
+  name rewrites it from the index, one that continues the session included,
+  and `adopt` leaves it alone. So a name a cluster declares later reads
+  declared at its session's next SessionStart (AT7). Until now only a new
+  or renamed row recomputed it. The directory still reads declared-ness from
+  the index, not from this field.
+- **`bind` and `touch` read the time once they hold the write lock**, as
+  `adopt` does since the 2026-11-14 entry. Both used the time read before
+  the busy wait of up to 30 seconds.
+- **Schema 2, and an older bindings file is reset on open.** The 2026-11-10
+  note on "held since" kept version 1 because the file was new and
+  unreleased. That is still true, so an older file is emptied rather than
+  migrated: in the transaction that makes the schema, every bindings table
+  any version made is dropped (`bindings`, `generations`, `names`,
+  `sightings`). `files.open_database` takes that reset step, which runs only
+  for a file of an older version, never a new one. The message store passes
+  none. A newer file is still refused before any write.
+  - **Why reset:** no user can have binding rows. The only release,
+    `v0.1.0` at `c55c9d2`, predates bindings. The CLI opens the bindings
+    file only if it exists, nothing in `src/` calls `bind`, and the hooks
+    that will (hub U8, U11) aren't built (the lead's check, recorded in the
+    plan's KC7 with the PM's approval on 2026-11-14). And the old rows hold
+    exactly the facts a rewrite lost, so rebuilding records from them would
+    carry the faults over.
+  - **Why not keep version 1:** an old-shape version-1 file would skip
+    schema creation and then fail on the missing tables, with exit 3.
+  - **What was promised:** `user_version` exists so a later version can
+    tell an older file and migrate it ([store durability](store-durability.md)).
+    The bump keeps that: the version says which shape the file has.
+  - **Sunset:** the reset is safe only while no released mycelium writes
+    rows. The first release that ships the hooks (hub U8) ends it; later
+    schema changes migrate or refuse. U3 and U4 each bump the version again,
+    each with a reset test from the version before.
+- **Known limit until U3 merges: continuing resume** [F4]. In the lease
+  holder's process, a `/resume` with a launch name onto a session whose
+  binding continues (kept out, a fork's, a nested one's, or current or
+  superseded under another name) re-confirms that binding. That supersedes
+  the holder, and an outside session can then bind current without the
+  nonce. The 2026-11-14 entry described this behaviour ("A launch name
+  keeps the lease less often than the text says"). The PM ruled that it is
+  not accepted behaviour but a limit (GRO-73, 2026-11-14): U3's lease gate
+  (the plan's KC5) closes it, and a U3 acceptance test pins it. This slice
+  doesn't change it.
+- **No other rule changes.** Every pin U1 added passes unchanged, and
+  existing tests changed only where they read a moved field or call the
+  directory with the name records.
