@@ -4,7 +4,8 @@ One row per (harness, session id), in an owner-only SQLite file in state
 (`bindings.sqlite3`), under the message store's file rules. The hook (U8 for
 Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
 `adopt`, `resolve_caller` (for `whoami`) and `authorize`; the directory reads
-`rows`. The rules are in docs/decisions/bindings.md. In short:
+`rows` and `names`, the one record per name that holds the name's own facts
+(U4c KC1). The rules are in docs/decisions/bindings.md. In short:
 
 - **Idempotent on the key** (KTD4): a SessionStart that continues a session
   (its hook re-run in the same process, or its resume or compaction in any
@@ -42,7 +43,7 @@ from mycelium.launch import Launch
 from mycelium.store import files
 from mycelium.topology import MAINTAINER
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 BUSY_TIMEOUT_SECONDS = 30
 SOURCES = ("startup", "resume", "compact", "clear", "fork")
 """SessionStart sources, as Claude names them; U11 maps Codex's onto these."""
@@ -64,7 +65,6 @@ _SCHEMA = (
         harness TEXT NOT NULL,
         session_id TEXT NOT NULL,
         name TEXT,
-        declared INTEGER NOT NULL,
         pid INTEGER,
         evidence TEXT NOT NULL,
         boot TEXT NOT NULL,
@@ -75,21 +75,37 @@ _SCHEMA = (
         bound_at REAL NOT NULL,
         last_seen REAL NOT NULL,
         seen_holds INTEGER,
-        bound_seen REAL,
         PRIMARY KEY (harness, session_id)
     )""",
     "CREATE INDEX IF NOT EXISTS bindings_by_name ON bindings (name)",
-    """CREATE TABLE IF NOT EXISTS generations (
+    """CREATE TABLE IF NOT EXISTS names (
         name TEXT PRIMARY KEY,
+        declared INTEGER NOT NULL,
         generation INTEGER NOT NULL,
-        holds INTEGER NOT NULL DEFAULT 0,
-        held_boot TEXT
+        epoch INTEGER NOT NULL,
+        held_boot TEXT,
+        bound_seen REAL,
+        first_bound_at REAL NOT NULL
     )""",
 )
-_FIELDS = (
-    "harness, session_id, name, declared, pid, evidence, boot, generation,"
-    " state, reason, nonce, bound_at, last_seen, seen_holds, bound_seen"
+_RESET = tuple(
+    f"DROP TABLE IF EXISTS {table}" for table in ("bindings", "generations", "names", "sightings")
 )
+"""Every bindings table any schema version made, or U4 will make (`sightings`):
+an older file starts empty (KC7).
+
+Safe only while no released mycelium writes binding rows; the first release
+that ships the hooks (hub U8) ends it, and later versions migrate or refuse."""
+_COLUMNS = (
+    "harness, session_id, name, pid, evidence, boot, generation,"
+    " state, reason, nonce, bound_at, last_seen, seen_holds"
+)
+_FIELDS = (
+    "b.harness, b.session_id, b.name, COALESCE(n.declared, 0), b.pid, b.evidence, b.boot,"
+    " b.generation, b.state, b.reason, b.nonce, b.bound_at, b.last_seen, b.seen_holds"
+)
+_ROWS = "bindings AS b LEFT JOIN names AS n ON n.name = b.name"
+"""A session row with its name's `declared`, which the name record holds (KC9)."""
 
 
 class Refused(Exception):
@@ -107,7 +123,7 @@ class Binding:
     session_id: str
     name: str | None
     declared: bool
-    """False for a name no cluster declares (R37)."""
+    """False for a name no cluster declares (R37); read from the name record."""
     pid: int | None
     """The harness process; None for a Codex TUI or a caller found by thread id."""
     evidence: str
@@ -122,14 +138,11 @@ class Binding:
     bound_at: float
     last_seen: float
     seen_holds: int | None = None
-    """The name's hold count when the binding last held it or went provisional for
-    it; None if neither. Every binding that becomes current for the name raises
-    the count, even one that keeps its generation, so nobody else has held the
-    name since while the count still equals it (lead ruling, GRO-50)."""
-    bound_seen: float | None = None
-    """When the binding was last seen current; None if it never was. An undeclared
-    name's 7-day clock runs from it, so a session that never holds the name, such
-    as one with no launch name, never refreshes the clock (lead ruling, GRO-50)."""
+    """The name's hold count (`NameRecord.epoch`) when the binding last held it or
+    went provisional for it; None if neither. Every binding that becomes current
+    for the name raises the count, even one that keeps its generation, so nobody
+    else has held the name since while the count still equals it (lead ruling,
+    GRO-50)."""
 
     @property
     def key(self) -> tuple[str, str]:
@@ -151,6 +164,28 @@ class Binding:
             "bound_at": iso(self.bound_at),
             "last_seen": iso(self.last_seen),
         }
+
+
+@dataclass(frozen=True)
+class NameRecord:
+    """One record per name: the name's own facts, which no session row's write
+    changes (U4c KC1). Records are never deleted, so generations never repeat."""
+
+    name: str
+    declared: bool
+    """Whether a cluster declared the name at the last SessionStart that carried it."""
+    generation: int
+    """The last generation issued; 0 until a binding is first current."""
+    epoch: int
+    """The hold count: +1 every time a binding becomes current for the name."""
+    held_boot: str | None
+    """The boot a binding last became current for the name in."""
+    bound_seen: float | None
+    """When a current binding of the name was last written; None if none ever was.
+    An undeclared name's 7-day clock runs from it (R37; lead ruling, GRO-50)."""
+    first_bound_at: float
+    """When the record was made: the first SessionStart that carried the name. The
+    clock of a name nobody ever held runs from it."""
 
 
 @dataclass(frozen=True)
@@ -282,15 +317,37 @@ def process_alive(
 class Bindings:
     def __init__(self, path: Path) -> None:
         self._db = files.open_database(
-            path, schema=_SCHEMA, version=SCHEMA_VERSION, busy_timeout=BUSY_TIMEOUT_SECONDS
+            path,
+            schema=_SCHEMA,
+            version=SCHEMA_VERSION,
+            busy_timeout=BUSY_TIMEOUT_SECONDS,
+            reset=_RESET,
         )
 
     def close(self) -> None:
         self._db.close()
 
     def rows(self) -> list[Binding]:
-        found = self._db.execute(f"SELECT {_FIELDS} FROM bindings ORDER BY bound_at, rowid")
+        found = self._db.execute(f"SELECT {_FIELDS} FROM {_ROWS} ORDER BY b.bound_at, b.rowid")
         return [_binding(row) for row in found]
+
+    def listing(self) -> tuple[list[Binding], list[NameRecord]]:
+        """The rows and the name records, read in one snapshot, as the directory needs
+        them: a bind that commits between two separate reads could pair old rows with
+        newer records."""
+        self._db.execute("BEGIN")
+        try:
+            return self.rows(), self.names()
+        finally:
+            self._db.execute("COMMIT")
+
+    def names(self) -> list[NameRecord]:
+        """Every name record, by name. A name keeps its record after its rows move on."""
+        found = self._db.execute(
+            "SELECT name, declared, generation, epoch, held_boot, bound_seen, first_bound_at"
+            " FROM names ORDER BY name"
+        )
+        return [NameRecord(row[0], bool(row[1]), *row[2:]) for row in found]
 
     def live_bindings(self, context: Context) -> list[Binding]:
         """Current bindings that are not dead: the ones that get delivery."""
@@ -313,6 +370,7 @@ class Bindings:
         if context.boot is None:
             return Bound(None, reason="the boot id can't be read, so nothing binds")
         with files.write(self._db):
+            context = context.locked()  # the busy wait may have taken a while (KC8)
             row = self._get(caller.harness, caller.session_id)
             if row is not None and self._continues(row, event, context):
                 return self._reconfirm(row, event, context)
@@ -387,6 +445,7 @@ class Bindings:
         `resolve_caller` finds it; for a caller with none from this boot, it
         changes nothing and returns that unbound resolution."""
         with files.write(self._db):
+            context = context.locked()  # the busy wait may have taken a while (KC8)
             found = self.resolve_caller(caller, context)
             if found.binding is None:
                 return found
@@ -431,8 +490,12 @@ class Bindings:
         """Keep the state, generation and nonce; take the caller's pid and evidence."""
         caller = event.caller
         state, reason = reconfirm(row, event.launch)
+        declared = row.declared
+        if row.name is not None and event.launch.name == row.name:
+            declared = self._record(row.name, context)
         found = replace(
             row,
+            declared=declared,
             state=state,
             reason=reason,
             pid=caller.pid,
@@ -458,20 +521,24 @@ class Bindings:
 
     def _decide(self, row: Binding | None, event: Event, context: Context) -> Bound:
         caller, name = event.caller, event.launch.name
-        own = self._same_process(caller, context)
         # A generation belongs to its name: a row decided under another name drops it.
         # With no launch name, the row keeps its own name, so a session that re-runs
         # its hook while its names disagree neither loses its generation nor forgets
         # who has held the name since (lead ruling, GRO-50).
         same = row is not None and row.name is not None and name in (None, row.name)
         decided_name = row.name if same else name
+        # A SessionStart that carries the name makes its record, or rewrites `declared`.
+        declared = row.declared if same else False
+        if name is not None:
+            declared = self._record(name, context)
+        own = self._same_process(caller, context)  # read after the record's rewrite
         # bound_at says since when the session is bound to this name.
         renamed = row is None or row.name != decided_name
         found = Binding(
             harness=caller.harness,
             session_id=caller.session_id,
             name=decided_name,
-            declared=row.declared if same else bool(name) and context.declared(name),
+            declared=declared,
             pid=caller.pid,
             evidence=caller.source,
             boot=context.boot,
@@ -482,7 +549,6 @@ class Bindings:
             bound_at=context.now if renamed else row.bound_at,
             last_seen=context.now,
             seen_holds=row.seen_holds if same else None,
-            bound_seen=row.bound_seen if same else None,
         )
         if name is None:
             found = replace(found, reason=event.launch.reason)
@@ -584,7 +650,7 @@ class Bindings:
         rivals = self._rivals(found)
         holds = self._name_state(found.name)[1] + 1
         self._db.execute(
-            "UPDATE generations SET holds = ?, held_boot = ? WHERE name = ?",
+            "UPDATE names SET epoch = ?, held_boot = ? WHERE name = ?",
             (holds, found.boot, found.name),
         )
         found = self._put(replace(found, seen_holds=holds))
@@ -615,8 +681,8 @@ class Bindings:
         if caller.pid is None:
             return []
         found = self._db.execute(
-            f"SELECT {_FIELDS} FROM bindings WHERE harness = ? AND pid = ? AND boot = ?"
-            " AND session_id != ? AND state != 'superseded' ORDER BY bound_at, rowid",
+            f"SELECT {_FIELDS} FROM {_ROWS} WHERE b.harness = ? AND b.pid = ? AND b.boot = ?"
+            " AND b.session_id != ? AND b.state != 'superseded' ORDER BY b.bound_at, b.rowid",
             (caller.harness, caller.pid, context.boot, caller.session_id),
         )
         return [_binding(row) for row in found]
@@ -642,35 +708,38 @@ class Bindings:
 
     def _get(self, harness: str, session_id: str) -> Binding | None:
         found = self._db.execute(
-            f"SELECT {_FIELDS} FROM bindings WHERE harness = ? AND session_id = ?",
+            f"SELECT {_FIELDS} FROM {_ROWS} WHERE b.harness = ? AND b.session_id = ?",
             (harness, session_id),
         ).fetchone()
         return None if found is None else _binding(found)
 
     def _named(self, name: str) -> list[Binding]:
         found = self._db.execute(
-            f"SELECT {_FIELDS} FROM bindings WHERE name = ? ORDER BY bound_at, rowid", (name,)
+            f"SELECT {_FIELDS} FROM {_ROWS} WHERE b.name = ? ORDER BY b.bound_at, b.rowid",
+            (name,),
         )
         return [_binding(row) for row in found]
 
     def _put(self, row: Binding) -> Binding:
-        """Write the row, and return it as written: a current row is seen bound now."""
+        """Write the row, and return it as written. A current row is seen bound now: its
+        name's `bound_seen` moves to the row's `last_seen` (I5)."""
         if row.state == "current":
-            row = replace(row, bound_seen=row.last_seen)
+            self._db.execute(
+                "UPDATE names SET bound_seen = ? WHERE name = ?", (row.last_seen, row.name)
+            )
         self._db.execute(
-            f"INSERT INTO bindings ({_FIELDS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            f"INSERT INTO bindings ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (harness, session_id) DO UPDATE SET"
-            " name = excluded.name, declared = excluded.declared, pid = excluded.pid,"
+            " name = excluded.name, pid = excluded.pid,"
             " evidence = excluded.evidence, boot = excluded.boot,"
             " generation = excluded.generation, state = excluded.state,"
             " reason = excluded.reason, nonce = excluded.nonce,"
             " bound_at = excluded.bound_at, last_seen = excluded.last_seen,"
-            " seen_holds = excluded.seen_holds, bound_seen = excluded.bound_seen",
+            " seen_holds = excluded.seen_holds",
             (
                 row.harness,
                 row.session_id,
                 row.name,
-                int(row.declared),
                 row.pid,
                 row.evidence,
                 row.boot,
@@ -681,10 +750,20 @@ class Bindings:
                 row.bound_at,
                 row.last_seen,
                 row.seen_holds,
-                row.bound_seen,
             ),
         )
         return row
+
+    def _record(self, name: str, context: Context) -> bool:
+        """Make the name's record if it has none, rewrite its `declared` from the
+        context, and return it (KC9). `first_bound_at` is set here, once."""
+        declared = bool(context.declared(name))
+        self._db.execute(
+            "INSERT INTO names (name, declared, generation, epoch, first_bound_at)"
+            " VALUES (?, ?, 0, 0, ?) ON CONFLICT (name) DO UPDATE SET declared = excluded.declared",
+            (name, int(declared), context.now),
+        )
+        return declared
 
     def _generation(self, name: str) -> int:
         return self._name_state(name)[0]
@@ -692,17 +771,14 @@ class Bindings:
     def _name_state(self, name: str) -> tuple[int, int, str | None]:
         """The name's generation, its hold count, and the boot a binding last held it in."""
         found = self._db.execute(
-            "SELECT generation, holds, held_boot FROM generations WHERE name = ?", (name,)
+            "SELECT generation, epoch, held_boot FROM names WHERE name = ?", (name,)
         ).fetchone()
         return (0, 0, None) if found is None else (found[0], found[1], found[2])
 
     def _next_generation(self, name: str) -> int:
+        """The name's next generation. Its record exists: every decision under a name made it."""
         generation = self._generation(name) + 1
-        self._db.execute(
-            "INSERT INTO generations (name, generation) VALUES (?, ?)"
-            " ON CONFLICT (name) DO UPDATE SET generation = excluded.generation",
-            (name, generation),
-        )
+        self._db.execute("UPDATE names SET generation = ? WHERE name = ?", (generation, name))
         return generation
 
 

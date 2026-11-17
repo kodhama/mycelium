@@ -145,7 +145,9 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   `/resume` keeps it only onto a session decided afresh: onto one whose
   binding continues (kept out, a fork's, a nested one's, or current or
   superseded under another name) it supersedes the holder, and the lease
-  goes with it. Two
+  goes with it, so another session can then bind current without the nonce
+  (continuing resume). The record lists this as a known limit until a later
+  release closes it. Two more
   known limits, listed in the record until a later release closes them, let
   another session bind current without the nonce. In the holder's process,
   a `/clear` whose new session has no launch name yet, or a `/resume` with
@@ -236,7 +238,11 @@ Deliverability is `live`, `absent`, `queue-only`, `held` or `gone`, computed
 from the clusters and the bindings each time. A name can be knocked only while live.
 
 - **A name declared in no cluster is live only with a live current
-  binding**; a provisional one doesn't count.
+  binding**; a provisional one doesn't count. With no hold, it is gone 7
+  days after a session last held it, or, if none ever did, 7 days after one first
+  carried it, unless mail waits. Each name keeps one record of those times,
+  so a session that moves to another name doesn't reset them, and the name
+  stays listed.
 - **Null fields:** `harness`, `generation`, `state` and `last_seen` are null
   for a name with no binding, and `generation` also when its binding was
   never current. `knock.how` is null unless `knock.can` is true.
@@ -262,6 +268,13 @@ records its schema version, and an older mycelium that finds a newer one
 stops with an error saying to update. It reads the version before it
 writes anything, so the store's data, a WAL left by a crash included, stays
 as it was.
+
+**A bindings file from an older mycelium starts empty.** No release has
+written binding rows yet, so until the release that ships the Claude hook (plan U8),
+an older file's tables are dropped and made again when it opens, rather
+than migrated
+([decision](docs/decisions/bindings.md)). A newer one is refused like the
+store.
 
 ## Develop
 
