@@ -603,7 +603,7 @@ class Bindings:
         elif event.source == "fork":
             found = replace(found, reason=FORK)
         else:
-            found = self._for_name(found, row, own, caller, context)
+            found = self._for_name(found, row, caller, context)
         if found.state == "current":
             return self._make_current(found, context, also=own)
         found = self._put(found)
@@ -613,7 +613,6 @@ class Bindings:
         self,
         found: Binding,
         row: Binding | None,
-        own: list[Binding],
         caller: Caller,
         context: Context,
     ) -> Binding:
@@ -631,7 +630,7 @@ class Bindings:
         if row is not None and row.boot == context.boot:
             mine = replace(row, pid=caller.pid, name=found.name)
         if self._in_force(record, claim, mine, context):
-            if not self._heir(record, claim, row, mine, caller, context):
+            if not self._heir(record, claim, row, caller, context):
                 reason = f"a lease holds {found.name}: adopt its nonce to become current"
                 return replace(found, state="provisional", reason=reason, seen_holds=holds)
             # A /clear or /resume in the process that holds the lease keeps the lease.
@@ -700,9 +699,7 @@ class Bindings:
         return (
             record.lease_pid is not None
             and holder.name in (record.name, None)
-            and claim.state == "live"
-            and claim.boot == context.boot
-            and claim.nonce == record.nonce
+            and _carries(claim, context.boot, record.nonce)
             and liveness(replace(holder, pid=record.lease_pid), context) != "dead"
         )
 
@@ -711,7 +708,6 @@ class Bindings:
         record: NameRecord,
         claim: lease.Claim,
         row: Binding | None,
-        mine: Binding | None,
         caller: Caller,
         context: Context,
     ) -> bool:
@@ -845,7 +841,7 @@ class Bindings:
             if old.name not in (record.name, None):
                 continue
             claim = context.claim(record.name)
-            if claim.state == "live" and claim.boot == old.boot and claim.nonce == record.nonce:
+            if _carries(claim, old.boot, record.nonce):
                 self._db.execute(
                     "UPDATE names SET lease_pid = ? WHERE name = ?", (old.pid, record.name)
                 )
@@ -856,7 +852,7 @@ class Bindings:
         for the name."""
         if record.lease_pid is None:
             return record
-        if claim.state == "live" and claim.boot == context.boot and claim.nonce == record.nonce:
+        if _carries(claim, context.boot, record.nonce):
             return record
         self._db.execute("UPDATE names SET lease_pid = NULL WHERE name = ?", (record.name,))
         return replace(record, lease_pid=None)
@@ -983,6 +979,11 @@ class Bindings:
         if done.rowcount != 1:
             raise RuntimeError(f"no name record for {name}")
         return self._name(name).generation
+
+
+def _carries(claim: lease.Claim, boot: str | None, nonce: str | None) -> bool:
+    """Whether the claim is live, of this boot, and carries this nonce."""
+    return claim.state == "live" and claim.boot == boot and claim.nonce == nonce
 
 
 def _name_record(row: sqlite3.Row | tuple) -> NameRecord:
