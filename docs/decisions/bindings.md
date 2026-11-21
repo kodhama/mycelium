@@ -648,9 +648,12 @@ U4.
   session id), `nonce` and `lease_pid`; session rows drop `nonce`. Every
   becoming-current (a fresh bind, a successor, the holder decided again, an
   adoption) writes the holder, raises `epoch` by one and records the boot. A
-  re-confirm and `touch` write only `bound_seen`. A binding's `nonce`, as
-  `whoami --json` prints it, is the record's when the session is the name's
-  holder and null otherwise, so its JSON keeps its keys. The nonce is set by
+  re-confirm writes no holder, `epoch` or nonce, and `touch` writes only
+  `bound_seen` and `last_seen`. A binding's `nonce`, as `whoami --json`
+  prints it, is the record's when the session is the holder of the name its
+  row points at, and null otherwise, so its JSON keeps its keys. A nameless
+  successor holding a name therefore shows a null nonce until it binds
+  under that name. The nonce is set by
   adoption, kept by an heir, and cleared when a session becomes current with
   no lease in force; a holder that goes provisional keeps it.
 - **The lease gate.** A pending claim holds while unexpired, as before. A live
@@ -660,7 +663,9 @@ U4.
   the name's: a holder that runs and is not superseded (b1), or a superseded
   holder whose `lease_pid` runs (b2). No other row's nonce counts: this
   replaces the 2026-11-12 entry's rule that any running session of the name
-  carrying the nonce keeps the lease. The caller's own row is judged with its
+  carrying the nonce keeps the lease, and its rule that "a superseded
+  session never keeps a lease in force", which (b2) now limits to every
+  superseded session but such a holder. The caller's own row is judged with its
   pid and the name being decided. Every bind path that would make a session
   current passes the gate: under a lease in force it becomes current only as
   the holder or the holder's successor, with the claim's nonce, and is
@@ -674,8 +679,10 @@ U4.
   provisional; with no lease, current with the nonce cleared. With no launch
   name, under a lease in force with the name's nonce, the successor becomes
   the holder, unbound and nameless, so the lease stays in force through it;
-  with no such lease nothing passes. A holder that renamed away passes
-  nothing of its old name on.
+  with no such lease nothing passes. A session that starts with no launch
+  name while still bound to another name, or kept out of this one, is no
+  successor: it supersedes the holder as a non-heir (below). A holder that
+  renamed away passes nothing of its old name on.
 - **F4 is closed** (the PM's rulings, GRO-73, 2026-11-15 and 2026-11-18).
   A session that is not the holder's heir and supersedes it in its own
   process (A30, which stands) leaves it the holder with the nonce. While a
@@ -685,8 +692,11 @@ U4.
   the `/resume` back to the holder, named for the role, is decided again and
   is current at the next generation with the nonce, as the 2026-11-10
   `/resume` back is; a `/clear` named for the role there is heir the same
-  way. Seen at another pid, or with no launch name, the holder stays
-  superseded, and `lease_pid` never takes the caller's pid. `lease_pid` is
+  way. A nameless successor holding the name counts as the holder here too.
+  Seen at another pid, or with no launch name, the holder never becomes
+  current: a resume or compaction leaves it superseded, and a `startup` at a
+  new pid, decided again, is provisional under the lease (A118's full rule
+  lands in U4). `lease_pid` never takes the caller's pid. `lease_pid` is
   cleared whenever a session becomes current for the name or the holder
   moves, and once the claim has ended: replaced by another claim, removed or
   unreadable. The claim file changes outside `bind`, so that clear happens at
@@ -695,9 +705,10 @@ U4.
   written above.
 - **`adopt` refuses a live claim that names no session** (A77, ruled): it is
   held neither by this session nor by another of its process, and grove
-  never writes one. **The holder adopting its nonce again is a no-op
-  success** (A78, ruled): same generation, same `epoch`, nothing superseded;
-  only `last_seen` and `bound_seen` move.
+  never writes one. **The current holder adopting its nonce again is a
+  no-op success** (A78, ruled): same generation, same `epoch`, nothing
+  superseded; only `last_seen` and `bound_seen` move. A holder that is not
+  current, such as one G2 unbound, still takes the next generation.
 - **Fixed limits:** nameless clear [F3] (A27), nameless resume [G3] (A28)
   and stale nonce [G4] (A80), each pinned. **Changed outcome:** a holder
   renamed away and back under its own live claim is current with its nonce

@@ -139,19 +139,20 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
 - **The newest session for a name is current**, and the one it replaces is
   superseded. The supersede is recorded once, so its notice can go out once;
   sending it is a later release's (mail, U5), and until then nothing tells
-  the superseded session. Under grove's lease only the name's holder, or
-  its successor in the holder's own process, becomes current, with the
-  lease nonce: `mycelium adopt <nonce>`, or a `/clear` or `/resume` with a
-  launch name in the process that holds the lease, which keeps it. A
-  `/clear` whose new session has no launch name yet keeps the lease for
-  that session, which binds current with the nonce once named, even resumed
-  in a new process. A session that supersedes the holder in its own process
+  the superseded session. Under grove's lease a session becomes current
+  only with the lease nonce: by `mycelium adopt <nonce>`, or as the name's
+  holder or its successor in the holder's own process, by a `/clear` or
+  `/resume` with a launch name there, which keeps it. A `/clear` whose new
+  session has no launch name yet keeps the lease for that session, which
+  binds current with the nonce once named, even resumed in a new process,
+  unless another session binds the name while it has no process. A session that supersedes the holder in its own process
   without the nonce, such as a `/resume` onto a session whose binding
   continues, leaves the lease with the holder: it stays in force while that
   process runs or until grove's claim changes, and there the `/resume` back,
   or a `/clear`, named for the role, takes it back. Only the session the
-  claim names, or the name's holder, keeps a lease in force; another
-  session's old nonce never does. The record lists the gaps a later release
+  claim names, or the name's holder, keeps a lease in force, and only while
+  it runs (a superseded holder, while that process runs); another session's
+  old nonce never does. The record lists the gaps a later release
   closes. A fork, or a session started inside another one, stays
   unbound unless it adopts the nonce. With no lease in force, a fork
   restored after a reboot before any session of the new boot holds the name
