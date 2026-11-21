@@ -1,11 +1,14 @@
 """Bindings: which session holds which role (R1-R4, R35, R37; KTD3-KTD6; hub plan U4)."""
 
 import json
+import multiprocessing
 import os
 import sqlite3
 import stat
 import time
+from contextlib import closing
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -1664,7 +1667,7 @@ _SCHEMA_1 = (
 )
 
 
-def test_a_version_one_bindings_file_opens_as_version_two_with_empty_tables(tmp_path):
+def test_a_version_one_bindings_file_opens_at_the_current_version_with_empty_tables(tmp_path):
     # KC7: no released mycelium wrote binding rows, so an older file is reset, not migrated.
     path = tmp_path / "bindings.sqlite3"
     with sqlite3.connect(path) as raw:
@@ -1678,10 +1681,9 @@ def test_a_version_one_bindings_file_opens_as_version_two_with_empty_tables(tmp_
             for (found,) in store._db.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         assert tables == {"bindings", "names"}
-        assert store._db.execute("PRAGMA user_version").fetchone() == (2,)
+        assert store._db.execute("PRAGMA user_version").fetchone() == (bindings.SCHEMA_VERSION,)
     finally:
         store.close()
-    assert bindings.SCHEMA_VERSION == 2
 
 
 def test_a_continuing_start_under_another_name_makes_no_record_for_it(world):
@@ -1735,3 +1737,429 @@ def test_the_directory_reads_rows_and_records_in_one_snapshot(world, monkeypatch
         other.close()
     assert [row.name for row in found] == ["scratch-probe"]
     assert [record.name for record in records] == ["scratch-probe"]
+
+
+# U4c U3: holder, nonce and lease on the name record (plan U3, KC4, KC5, KC6's third
+# exception, KC7; A77 and A78 ruled; F4 closed by the PM's rulings of 11-15 and 11-18).
+
+N, M = "ogham-worker", "ogham-lead"
+P = 1001  # the holder A's process
+
+
+def _live(world, session, name=N, nonce="n1"):
+    world.claim(name=name, nonce=nonce, state="live", expires=None, pane="w1:p1", session=session)
+
+
+def _holder_with_a_live_lease(world, caller=A, name=N):
+    """`caller` adopts n1 for `name` and grove marks the claim live for it."""
+    world.claim(name=name, nonce="n1")
+    world.bind(caller, launch=name)
+    world.adopt(caller, "n1")
+    _live(world, caller.session_id, name=name)
+
+
+def _record(world, name=N):
+    return names(world)[name]
+
+
+def test_a_lease_holders_nameless_clear_keeps_the_lease_for_its_successor(world):
+    # A27 (nameless clear, F3, fixed): the successor holds the name unbound, outsiders
+    # go provisional, and once named it is current at the next generation with n1.
+    _holder_with_a_live_lease(world)
+    successor = claude(P, "s-t")
+    cleared = world.bind(successor, launch=NO_NAME, source="clear")
+    assert (cleared.binding.state, cleared.binding.name) == ("unbound", None)
+    assert _record(world).holder == ("claude", "s-t")
+    assert world.bind(claude(3003, "s-c")).binding.state == "provisional"
+    named_later = world.bind(successor, source="resume").binding
+    assert (named_later.state, named_later.generation, named_later.nonce) == ("current", 2, "n1")
+
+
+def test_a_nameless_successor_resumed_in_a_new_pid_keeps_the_lease(world):
+    # A28 (nameless resume, G3, fixed): the lease lives through the successor itself.
+    _holder_with_a_live_lease(world)
+    world.bind(claude(P, "s-t"), launch=NO_NAME, source="clear")
+    world.alive.discard(P)
+    restored = world.bind(claude(1500, "s-t"), source="resume").binding
+    assert (restored.state, restored.nonce, restored.generation) == ("current", "n1", 2)
+
+
+def test_a_stale_nonce_never_keeps_a_lease_in_force_after_its_adopter_dies(world):
+    # A80 (stale nonce, G4, fixed): A, G2-unbound, once adopted n1; B adopted it since
+    # and died. Only the claim's session or the name's holder keeps a lease in force.
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.bind(A, launch=RENAMED, source="resume")  # G2: A unbound
+    world.bind(B)
+    world.adopt(B, "n1")
+    _live(world, "s-b")
+    world.alive.discard(2002)
+    found = world.bind(claude(3003, "s-c")).binding
+    assert (found.state, found.nonce) == ("current", None)
+    assert _record(world).nonce is None
+
+
+def test_a_name_whose_adopter_dies_after_its_old_holders_process_clears_is_not_stuck(world):
+    # RC10, the GRO-72 regression test.
+    world.bind(A)
+    world.claim(nonce="n1")
+    world.bind(B)
+    world.adopt(B, "n1")  # B supersedes A
+    _live(world, "s-b")
+    assert world.bind(claude(P, "s-t"), source="clear").binding.state == "provisional"
+    world.alive.discard(2002)
+    assert world.bind(claude(3003, "s-c")).binding.state == "current"
+
+
+def test_adopt_refuses_a_live_claim_that_names_no_session(world):
+    # A77, ruled: a live claim naming no session is held by neither this session nor
+    # another of its process (docs/decisions/bindings.md, adopt's rule).
+    world.claim(nonce="n1", state="live", expires=None, pane=None, session=None)
+    before = world.bind(A).binding
+    with pytest.raises(Refused, match="names no session"):
+        world.adopt(A, "n1")
+    assert world.resolve(A).binding == before
+    assert _record(world).nonce is None
+
+
+def test_adopting_again_as_the_current_holder_keeps_the_hold_count(world):
+    # A78, ruled: the holder's repeat adoption is a no-op success; only the clocks move.
+    world.claim(nonce="n1")
+    world.bind(A)
+    first = world.adopt(A, "n1")
+    epoch = _record(world).epoch
+    again = world.adopt(A, "n1")
+    assert (again.binding.generation, again.superseded) == (first.binding.generation, ())
+    assert (_record(world).epoch, _record(world).bound_seen) == (epoch, world.now)
+
+
+def test_the_name_record_keeps_its_invariants_through_a_scripted_sequence(world):
+    # I1-I4 (plan U3): one current row per name, and it is the holder; generations never
+    # fall or repeat; the hold count rises once per becoming-current; the nonce is set
+    # by adoption, kept by an heir, and cleared by a current result with no lease.
+    c, t, d = claude(3003, "s-c"), claude(P, "s-t"), claude(5005, "s-d")
+    steps = [
+        # (what happens, epoch rise, record nonce after, holder after)
+        (lambda: world.bind(A), 1, None, "s-a"),
+        (lambda: world.claim(nonce="n1"), 0, None, "s-a"),
+        (lambda: world.bind(c), 0, None, "s-a"),  # provisional
+        (lambda: world.adopt(A, "n1"), 1, "n1", "s-a"),  # A was current with no nonce
+        (lambda: _live(world, "s-a"), 0, "n1", "s-a"),
+        (lambda: world.adopt(A, "n1"), 0, "n1", "s-a"),  # A78
+        (lambda: world.bind(A, source="resume"), 0, "n1", "s-a"),  # continues
+        (lambda: world.bind(t, launch=NO_NAME, source="clear"), 0, "n1", "s-t"),
+        (lambda: world.bind(t, source="resume"), 1, "n1", "s-t"),  # heir, named
+        (lambda: world.alive.discard(P), 0, "n1", "s-t"),
+        (lambda: world.bind(d), 1, None, "s-d"),  # no lease in force: I4 clears the nonce
+    ]
+    generations = []
+    for act, rise, nonce, holder in steps:
+        epoch = _record(world).epoch if N in names(world) else 0
+        act()
+        record = _record(world)
+        assert record.epoch - epoch == rise  # I3
+        assert (record.nonce, record.holder[1]) == (nonce, holder)  # I4
+        current = [row for row in world.store.rows() if row.name == N and row.state == "current"]
+        assert len(current) <= 1  # I1
+        assert all(row.key == record.holder for row in current)  # I1
+        assert all((row.generation or 0) <= record.generation for row in world.store.rows())
+        generations.append(record.generation)
+    assert generations == sorted(generations)  # I2
+    assert generations[-1] == 4
+
+
+def test_a_named_clear_under_another_nonces_lease_is_provisional(world):
+    # X4 (AT2): the successor succeeds the holder, but the claim's nonce is not N's.
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.claim(nonce="n2")
+    assert world.bind(claude(P, "s-c"), source="clear").binding.state == "provisional"
+    assert (_record(world).holder, _record(world).nonce) == (("claude", "s-a"), "n1")
+
+
+def test_a_successor_away_between_processes_loses_the_lease(world):
+    # X5 (AT3), U3's half: the nameless successor's process ends, so nothing keeps the
+    # lease in force; an outsider is current and the name's nonce is cleared.
+    _holder_with_a_live_lease(world)
+    world.bind(claude(P, "s-t"), launch=NO_NAME, source="clear")
+    world.alive.discard(P)
+    assert world.bind(claude(3003, "s-c")).binding.state == "current"
+    assert (_record(world).holder, _record(world).nonce) == (("claude", "s-c"), None)
+
+
+def test_a_nameless_successor_never_revives_a_lease_its_holder_left(world):
+    # X6 (AT4): A renamed away to M, so N's lease lapsed; its process's nameless /clear
+    # passes nothing of N on, and stores no lease_pid for N either.
+    _holder_with_a_live_lease(world)
+    world.bind(A, launch=M, source="resume")  # G2
+    assert world.bind(A, launch=M, source="resume").binding.state == "current"
+    world.bind(claude(P, "s-t"), launch=NO_NAME, source="clear")
+    assert (_record(world).holder, _record(world).lease_pid) == (("claude", "s-a"), None)
+    assert world.bind(claude(3003, "s-c")).binding.state == "current"
+
+
+def test_a_holder_renamed_back_under_its_own_live_claim_keeps_the_lease(world):
+    # X9, a changed outcome: ruling 3 gives the lease to the session the claim names,
+    # which is this one; before U3 its nonce was dropped at the rename.
+    _holder_with_a_live_lease(world)
+    world.bind(A, launch=M, source="resume")
+    world.bind(A, launch=M, source="resume")  # current under M
+    world.bind(A, source="resume")  # G2 again
+    back = world.bind(A, source="resume").binding
+    assert (back.name, back.state, back.nonce, back.generation) == (N, "current", "n1", 2)
+
+
+# F4 (PM rulings, GRO-73 11-15 and 11-18): a non-heir in the holder's process supersedes
+# the holder (A30), and N's lease stays in force through lease_pid while that pid lives.
+
+
+def _t_current_under_m(world):
+    t = claude(4004, "s-t")
+    world.bind(t, launch=M)
+    return t
+
+
+def _t_kept_out_of_n(world):
+    t = claude(4004, "s-t")
+    world.bind(t)  # generation 1
+    world.bind(t, launch=RENAMED, source="resume")  # G2
+    return t
+
+
+def _t_a_fork_of_n(world):
+    t = claude(4004, "s-t")
+    world.bind(t, source="fork")
+    return t
+
+
+def _non_heir_resumes_into_p(world, make_t=_t_a_fork_of_n):
+    """F4 (i): H (A) holds N with live n1 in P; a T whose binding continues is resumed
+    into P, named N, and supersedes H."""
+    t = make_t(world)
+    _holder_with_a_live_lease(world)
+    t_in_p = claude(P, t.session_id)
+    if make_t is _t_kept_out_of_n:
+        assert world.bind(t, source="resume").binding.reason.startswith("another session held")
+    done = world.bind(t_in_p, source="resume")
+    assert [old.session_id for old in done.superseded] == ["s-a"]
+    return t_in_p
+
+
+@pytest.mark.parametrize("make_t", [_t_current_under_m, _t_kept_out_of_n, _t_a_fork_of_n])
+def test_a_non_heirs_resume_in_the_holders_process_keeps_the_lease_through_the_pid(world, make_t):
+    _non_heir_resumes_into_p(world, make_t)
+    record = _record(world)
+    assert (record.holder, record.nonce, record.lease_pid) == (("claude", "s-a"), "n1", P)
+    assert world.resolve(A).state == "superseded"
+    assert world.bind(claude(3003, "s-c")).binding.state == "provisional"
+
+
+def test_a_resume_back_to_a_superseded_holder_under_its_lease_is_current(world):
+    # F4 (ii): the /resume back in that pid is heir, at the next generation, as A21.
+    t = _non_heir_resumes_into_p(world)
+    generation = _record(world).generation
+    back = world.bind(A, source="resume")
+    found = back.binding
+    assert (found.state, found.nonce, found.generation) == ("current", "n1", generation + 1)
+    assert [old.session_id for old in back.superseded] == [t.session_id]
+    assert _record(world).lease_pid is None
+
+
+def test_a_superseded_holders_lease_lapses_when_its_process_dies(world):
+    # F4 (iii): lease_pid is the lease's only keeper once the holder is superseded.
+    _non_heir_resumes_into_p(world)
+    world.alive.discard(P)
+    assert world.bind(claude(3003, "s-c")).binding.state == "current"
+    assert (_record(world).nonce, _record(world).lease_pid) == (None, None)
+
+
+def test_a_superseded_session_resumed_into_the_holders_process_keeps_the_lease(world):
+    # F4, A30's superseded case: T, superseded under M, is resumed into P.
+    t = claude(4004, "s-t")
+    world.bind(t, launch=M)
+    world.bind(claude(6006, "s-u"), launch=M)  # T superseded
+    _holder_with_a_live_lease(world)
+    done = world.bind(claude(P, "s-t"), launch=M, source="resume")
+    assert done.binding.state == "superseded"
+    assert [old.session_id for old in done.superseded] == ["s-a"]
+    assert _record(world).lease_pid == P
+    assert world.bind(claude(3003, "s-c")).binding.state == "provisional"
+
+
+def test_a_resume_back_after_a_nameless_clear_under_a_lease_keeps_the_lease(world):
+    # F4, X10 with a lease: H's /resume back stays superseded (X10) and supersedes the
+    # nameless successor T, N's holder; the lease stays in force while P lives.
+    _holder_with_a_live_lease(world)
+    world.bind(claude(P, "s-t"), launch=NO_NAME, source="clear")
+    back = world.bind(A, source="resume")
+    assert back.binding.state == "superseded"
+    assert [old.session_id for old in back.superseded] == ["s-t"]
+    assert (_record(world).holder, _record(world).lease_pid) == (("claude", "s-t"), P)
+    assert world.bind(claude(3003, "s-c")).binding.state == "provisional"
+
+
+def test_a_named_clear_in_the_lease_pid_is_heir(world):
+    # F4, ruling point 3: a /clear named N in that pid is current, next generation, n1.
+    _non_heir_resumes_into_p(world)
+    generation = _record(world).generation
+    found = world.bind(claude(P, "s-c2"), source="clear").binding
+    assert (found.state, found.nonce, found.generation) == ("current", "n1", generation + 1)
+    assert _record(world).lease_pid is None
+
+
+def test_a_superseded_holder_seen_at_another_pid_leaves_the_lease_with_its_first_process(world):
+    # F4, another pid: lease_pid never takes the caller's pid.
+    _non_heir_resumes_into_p(world)
+    assert world.bind(claude(1500, "s-a"), source="resume").binding.state == "superseded"
+    assert _record(world).lease_pid == P
+    assert world.bind(claude(3003, "s-c")).binding.state == "provisional"
+
+
+@pytest.mark.parametrize(
+    ("ends", "outsider"),
+    [
+        (lambda world: world.claim(nonce="n2"), "provisional"),  # the new claim's gate
+        (lambda world: lease.claim_path(world.homes, N).unlink(), "current"),
+        (lambda world: lease.claim_path(world.homes, N).write_text("not json"), "current"),
+    ],
+    ids=["replaced", "removed", "unreadable"],
+)
+def test_lease_pid_clears_when_the_claim_ends(world, ends, outsider):
+    # F4, the claim ends: (b2) needs the live claim to carry N's nonce. The claim file
+    # changes outside bind, so lease_pid is cleared at the next decision for N.
+    _non_heir_resumes_into_p(world)
+    ends(world)
+    assert world.bind(A, source="resume").binding.state == "superseded"
+    assert _record(world).lease_pid is None
+    assert world.bind(claude(3003, "s-c")).binding.state == outsider
+
+
+def test_adopting_another_name_in_the_holders_pid_keeps_the_lease(world):
+    # F4, adopt (A71): a session in H's pid adopts a claim on M and supersedes H.
+    world.claim(name=M, nonce="m1")
+    d = claude(P, "s-d")
+    assert world.bind(d, launch=M).binding.state == "provisional"
+    world.claim(nonce="n1")
+    world.bind(A, source="clear")  # supersedes D (A30)
+    world.adopt(A, "n1")
+    _live(world, "s-a")
+    adopted = world.adopt(d, "m1")
+    assert [old.session_id for old in adopted.superseded] == ["s-a"]
+    assert _record(world).lease_pid == P
+    assert world.bind(claude(3003, "s-c")).binding.state == "provisional"
+
+
+# KC7: schema 3 resets a version-2 file.
+
+_SCHEMA_2 = (
+    """CREATE TABLE bindings (harness TEXT NOT NULL, session_id TEXT NOT NULL, name TEXT,
+    pid INTEGER, evidence TEXT NOT NULL, boot TEXT NOT NULL, generation INTEGER,
+    state TEXT NOT NULL, reason TEXT, nonce TEXT, bound_at REAL NOT NULL,
+    last_seen REAL NOT NULL, seen_holds INTEGER, PRIMARY KEY (harness, session_id))""",
+    """CREATE TABLE names (name TEXT PRIMARY KEY, declared INTEGER NOT NULL,
+    generation INTEGER NOT NULL, epoch INTEGER NOT NULL, held_boot TEXT, bound_seen REAL,
+    first_bound_at REAL NOT NULL)""",
+    "INSERT INTO bindings VALUES ('claude', 's-a', 'ogham-worker', 1001, 'walk', 'boot-now',"
+    " 3, 'current', NULL, 'n1', 0, 0, 1)",
+    "INSERT INTO names VALUES ('ogham-worker', 1, 3, 1, 'boot-now', 0, 0)",
+    "PRAGMA user_version=2",
+)
+
+
+def _version_two_file(path):
+    with closing(sqlite3.connect(path)) as raw:
+        for statement in _SCHEMA_2:
+            raw.execute(statement)
+        raw.commit()
+
+
+def _columns(db, table):
+    return {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
+
+
+def test_a_version_two_bindings_file_opens_as_version_three_with_every_table_recreated(
+    tmp_path,
+):
+    path = tmp_path / "bindings.sqlite3"
+    _version_two_file(path)
+    store = bindings.open_bindings(path)
+    try:
+        assert (store.rows(), store.names()) == ([], [])
+        assert {"holder_harness", "holder_session", "nonce", "lease_pid"} <= _columns(
+            store._db, "names"
+        )
+        assert "nonce" not in _columns(store._db, "bindings")
+        assert store._db.execute("PRAGMA user_version").fetchone() == (3,)
+    finally:
+        store.close()
+    assert bindings.SCHEMA_VERSION == 3
+
+
+def _open_and_bind(path, session):
+    store = bindings.open_bindings(Path(path))
+    try:
+        context = Context(
+            BOOT,
+            NOW,
+            lambda name: False,
+            lambda name: lease.Claim("none"),
+            lambda pid, harness: True,
+        )
+        store.bind(Event("startup", claude(int(session[2:]), session), named(session)), context)
+    finally:
+        store.close()
+
+
+def test_two_opens_racing_over_a_version_two_file_reset_it_once(tmp_path):
+    # T4: the second opener reads the version again under the write lock, so it never
+    # resets the file the first one has just made and bound in.
+    path = tmp_path / "bindings.sqlite3"
+    _version_two_file(path)
+    spawn = multiprocessing.get_context("spawn")
+    workers = [spawn.Process(target=_open_and_bind, args=(str(path), f"s-{n}")) for n in (71, 72)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join(60)
+        assert worker.exitcode == 0
+    store = bindings.open_bindings(path)
+    try:
+        assert sorted(row.session_id for row in store.rows()) == ["s-71", "s-72"]
+        assert store._db.execute("PRAGMA user_version").fetchone() == (3,)
+    finally:
+        store.close()
+
+
+# U2's residuals that fall in U3 (GRO-75 7c9e3981).
+
+
+def test_a_missing_name_record_fails_loudly(world):
+    # N2: every decision under a name makes its record first, so a write that finds
+    # none is a bug, never a silent no-op.
+    with pytest.raises(RuntimeError, match="no name record"):
+        world.store._next_generation("never-seen")
+    row = world.bind(A).binding
+    with pytest.raises(RuntimeError, match="no name record"):
+        world.store._make_current(replace(row, name="never-seen"), world.context())
+
+
+def test_a_listing_whose_read_failed_reports_that_error(world, monkeypatch):
+    # R2: SQLite may already have rolled back; the COMMIT must not hide the real error.
+    def rolled_back(store):
+        store._db.execute("ROLLBACK")
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(bindings.Bindings, "rows", rolled_back)
+    with pytest.raises(sqlite3.OperationalError, match="disk I/O"):
+        world.store.listing()
+
+
+def test_a_name_no_longer_declared_reads_undeclared_at_its_next_session_start(world):
+    # T3: AT7 the other way round.
+    world.declared.add(SCRATCH)
+    assert world.bind(A, launch=SCRATCH).binding.declared is True
+    world.declared.discard(SCRATCH)
+    assert world.bind(A, launch=SCRATCH, source="resume").binding.declared is False
+    assert names(world)[SCRATCH].declared is False

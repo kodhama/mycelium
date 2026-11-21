@@ -311,6 +311,37 @@ def test_directory_prints_every_name_as_json(machine, org, capsys):
     assert rows["mq-roadmap-assistant"]["deliverability"] == "queue-only"
 
 
+def test_directory_reads_the_bindings_in_one_snapshot(machine, org, capsys, monkeypatch):
+    # T1 (GRO-75 residual): the CLI lists through Bindings.listing, the one-snapshot read.
+    machine.bind("s-1", name="mq-pm")
+    calls = []
+    listing = bindings.Bindings.listing
+
+    def counted(store):
+        calls.append(store)
+        return listing(store)
+
+    monkeypatch.setattr(bindings.Bindings, "listing", counted)
+    code, out, _ = run(capsys, "directory")
+    assert (code, len(calls)) == (0, 1)
+    assert "mq-pm" in {row["name"] for row in json.loads(out)["names"]}
+
+
+def test_the_cli_never_binds_so_its_declared_stub_never_reaches_bind():
+    # R4 (GRO-75 residual): _context's `declared` answers False for every name, which a
+    # bind would write to the name record (KC9); no CLI code path may call bind.
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(cli))
+    calls = {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+    assert "bind" not in calls
+
+
 def test_directory_with_the_helper_unavailable_exits_3(machine, capsys, monkeypatch):
     def unavailable():
         raise clusters.HelperUnavailable("kodhama-cluster is not installed")
