@@ -693,10 +693,14 @@ U4.
   is current at the next generation with the nonce, as the 2026-11-10
   `/resume` back is; a `/clear` named for the role there is heir the same
   way. A nameless successor holding the name counts as the holder here too.
-  Seen at another pid, or with no launch name, the holder never becomes
-  current: a resume or compaction leaves it superseded, and a `startup` at a
-  new pid, decided again, is provisional under the lease (A118's full rule
-  lands in U4). `lease_pid` never takes the caller's pid. `lease_pid` is
+  Seen at another pid, or with no launch name, a resume or compaction
+  leaves the holder superseded. A `startup` at a new pid that is decided
+  again leaves it the holder but no longer superseded: provisional under
+  the lease if named, unbound if nameless. From there A118's case stays
+  open until U4: the lease holds through the holder's own row, even after
+  `lease_pid`'s process ends, and the holder's next start that is decided
+  again and named for the role, at any pid, is current with the old nonce.
+  `lease_pid` never takes the caller's pid. `lease_pid` is
   cleared whenever a session becomes current for the name or the holder
   moves, and once the claim has ended: replaced by another claim, removed or
   unreadable. The claim file changes outside `bind`, so that clear happens at
