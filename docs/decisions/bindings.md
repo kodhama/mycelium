@@ -635,3 +635,80 @@ and the lease stay on the rows until U3, and keep-out until U4.
 - **No other rule changes.** Every pin U1 added passes unchanged, and
   existing tests changed only where they read a moved field or call the
   directory with the name records.
+
+## 2026-11-21 holder, nonce and lease on the name record (U4c U3, GRO-76)
+
+The third U4c slice (hub plan
+`areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `6e4953b`, unit
+U3) moves the holder and its lease nonce onto the name record, decides the
+lease from it, and closes F4. Keep-out stays on the rows' `seen_holds` until
+U4.
+
+- **The record holds the holder.** `names` gains `holder` (harness and
+  session id), `nonce` and `lease_pid`; session rows drop `nonce`. Every
+  becoming-current (a fresh bind, a successor, the holder decided again, an
+  adoption) writes the holder, raises `epoch` by one and records the boot. A
+  re-confirm and `touch` write only `bound_seen`. A binding's `nonce`, as
+  `whoami --json` prints it, is the record's when the session is the name's
+  holder and null otherwise, so its JSON keeps its keys. The nonce is set by
+  adoption, kept by an heir, and cleared when a session becomes current with
+  no lease in force; a holder that goes provisional keeps it.
+- **The lease gate.** A pending claim holds while unexpired, as before. A live
+  claim of this boot holds only (a) through a running row of the name, not
+  superseded, whose session the claim names, or (b) through the name's
+  holder, still pointing at the name or at none, while the claim's nonce is
+  the name's: a holder that runs and is not superseded (b1), or a superseded
+  holder whose `lease_pid` runs (b2). No other row's nonce counts: this
+  replaces the 2026-11-12 entry's rule that any running session of the name
+  carrying the nonce keeps the lease. The caller's own row is judged with its
+  pid and the name being decided. Every bind path that would make a session
+  current passes the gate: under a lease in force it becomes current only as
+  the holder or the holder's successor, with the claim's nonce, and is
+  provisional otherwise.
+- **Process succession replaces the nonce on the row.** A session succeeds
+  the name's holder when the holder runs in its process (same harness, pid
+  and boot), is not superseded and still points at the name or at none. A
+  fork or nested session never succeeds, nor does a kept-out session to the
+  name it is kept out of. With a launch name, the gate decides: heir, current
+  at the next generation with the nonce; under another nonce's lease,
+  provisional; with no lease, current with the nonce cleared. With no launch
+  name, under a lease in force with the name's nonce, the successor becomes
+  the holder, unbound and nameless, so the lease stays in force through it;
+  with no such lease nothing passes. A holder that renamed away passes
+  nothing of its old name on.
+- **F4 is closed** (the PM's rulings, GRO-73, 2026-11-15 and 2026-11-18).
+  A session that is not the holder's heir and supersedes it in its own
+  process (A30, which stands) leaves it the holder with the nonce. While a
+  live claim carries that nonce, the record stores the holder's pid as
+  `lease_pid`, and the lease stays in force while that pid runs or until the
+  claim ends, whichever comes first; outsiders go provisional. In that pid,
+  the `/resume` back to the holder, named for the role, is decided again and
+  is current at the next generation with the nonce, as the 2026-11-10
+  `/resume` back is; a `/clear` named for the role there is heir the same
+  way. Seen at another pid, or with no launch name, the holder stays
+  superseded, and `lease_pid` never takes the caller's pid. `lease_pid` is
+  cleared whenever a session becomes current for the name or the holder
+  moves, and once the claim has ended: replaced by another claim, removed or
+  unreadable. The claim file changes outside `bind`, so that clear happens at
+  the next decision for the name. With no live claim nothing is stored.
+  This closes the U2 entry's "Known limit until U3 merges", which stays as
+  written above.
+- **`adopt` refuses a live claim that names no session** (A77, ruled): it is
+  held neither by this session nor by another of its process, and grove
+  never writes one. **The holder adopting its nonce again is a no-op
+  success** (A78, ruled): same generation, same `epoch`, nothing superseded;
+  only `last_seen` and `bound_seen` move.
+- **Fixed limits:** nameless clear [F3] (A27), nameless resume [G3] (A28)
+  and stale nonce [G4] (A80), each pinned. **Changed outcome:** a holder
+  renamed away and back under its own live claim is current with its nonce
+  (X9); until now it ended provisional, since the rename dropped the nonce.
+- **Still open until U4:** a superseded session's return at a new pid with
+  source `startup` (A118, N2), and the keep-out of a nameless successor that
+  lost the lease between processes, once an outsider took the name and it
+  resumes named (X5's second half): today it takes the name back. Startup
+  escape and rename back stay as listed.
+- **Schema 3.** A version-2 file is reset on open, as the U2 entry says,
+  with its own reset test, and two openers racing over it reset it once. A
+  newer file is still refused.
+- **A missing name record now raises.** Every decision under a name makes
+  its record first, so a write that finds none is a bug, not a silent no-op.

@@ -12,8 +12,12 @@ Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
   process of this boot) re-confirms the binding: it keeps its state,
   generation and nonce, takes the caller's pid and evidence, and passes the
   G2 check. Unbound sessions other than forks and nested ones, provisional
-  ones, and a superseded one whose name its own process now holds are
-  decided again instead.
+  ones, a superseded one whose name its own process now holds, and a
+  superseded holder back in its name's `lease_pid` are decided again instead.
+- **The lease** (U4c KC4, KC5): the name record holds the holder and its
+  nonce. Under a live claim only the session it names, or the holder, keeps
+  the lease in force; a holder superseded in its own process by a non-heir
+  keeps it through `lease_pid` while that pid runs.
 - **Generations, per name**, rise when a binding becomes current by a fresh
   start, a `/clear` or a `/resume` onto another session in the same process,
   or an adoption. A resume or compaction of the same session keeps its own, and
