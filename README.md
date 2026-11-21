@@ -139,24 +139,21 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
 - **The newest session for a name is current**, and the one it replaces is
   superseded. The supersede is recorded once, so its notice can go out once;
   sending it is a later release's (mail, U5), and until then nothing tells
-  the superseded session. Under grove's lease only the lease nonce makes a
-  session current: `mycelium adopt <nonce>`, or a `/clear` or `/resume` with
-  a launch name in the process that holds the lease, which keeps it. A
-  `/resume` keeps it only onto a session decided afresh: onto one whose
-  binding continues (kept out, a fork's, a nested one's, or current or
-  superseded under another name) it supersedes the holder, and the lease
-  goes with it, so another session can then bind current without the nonce
-  (continuing resume). The record lists this as a known limit until a later
-  release closes it. Two more
-  known limits, listed in the record until a later release closes them, let
-  another session bind current without the nonce. In the holder's process,
-  a `/clear` whose new session has no launch name yet, or a `/resume` with
-  no launch name, loses the lease (nameless clear), unless the `/resume`
-  lands on the session the lease names or on one that carries its nonce;
-  the latter keeps it only until its next start with a launch name, which
-  keeps it out and clears the nonce. And a successor with no nonce yet,
-  resumed in a new process after the holder's has ended, loses it too
-  (nameless resume). A fork, or a session started inside another one, stays
+  the superseded session. Under grove's lease a session becomes current
+  only with the lease nonce: by `mycelium adopt <nonce>`, or as the name's
+  holder or its successor in the holder's own process, by a `/clear` or
+  `/resume` with a launch name there, which keeps it. A `/clear` whose new
+  session has no launch name yet keeps the lease for that session, which
+  binds current with the nonce once named, even resumed in a new process,
+  unless another session binds the name while it has no process. A session that supersedes the holder in its own process
+  without the nonce, such as a `/resume` onto a session whose binding
+  continues, leaves the lease with the holder: it stays in force while that
+  process runs or until grove's claim changes, and there the `/resume` back,
+  or a `/clear`, named for the role, takes it back. Only the session the
+  claim names, or the name's holder, keeps a lease in force, and only while
+  it runs (a superseded holder, while that process runs); another session's
+  old nonce never does. The record lists the gaps a later release
+  closes. A fork, or a session started inside another one, stays
   unbound unless it adopts the nonce. With no lease in force, a fork
   restored after a reboot before any session of the new boot holds the name
   binds current (below).
@@ -216,8 +213,8 @@ compares it with `KODHAMA_AGENT`.
 **`mycelium adopt <nonce>` adopts grove's lease.** On success it prints what
 `whoami` prints and exits 0. It uses the same exit codes: 1 when it refuses
 (no binding yet, no launch name, no lease, a wrong nonce, a claim from an
-earlier boot, an expired one, or a live one naming a session of another
-process, running or not), 2 for a usage error, and 3 as above, or when the
+earlier boot, an expired one, a live one naming no session, or one naming
+a session of another process, running or not), 2 for a usage error, and 3 as above, or when the
 index or the cluster helper can't be read. A live lease naming another
 session of the caller's own process, as a `/clear` or `/resume` leaves it,
 can be adopted.
@@ -242,7 +239,8 @@ from the clusters and the bindings each time. A name can be knocked only while l
   days after a session last held it, or, if none ever did, 7 days after one first
   carried it, unless mail waits. Each name keeps one record of those times,
   so a session that moves to another name doesn't reset them, and the name
-  stays listed.
+  stays listed. Until hub U5 and U8 land, a session that runs more than
+  7 days without a SessionStart can read gone once it exits.
 - **Null fields:** `harness`, `generation`, `state` and `last_seen` are null
   for a name with no binding, and `generation` also when its binding was
   never current. `knock.how` is null unless `knock.can` is true.
