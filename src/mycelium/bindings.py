@@ -720,7 +720,9 @@ class Bindings:
             return False
         if row is not None and holder.key == row.key:
             # A superseded holder is heir only back in its lease_pid (KC6, F4).
-            return holder.state != "superseded" or caller.pid == record.lease_pid
+            return holder.state != "superseded" or (
+                caller.pid is not None and caller.pid == record.lease_pid
+            )
         return self._succeeds(record, holder, row, caller, claim, context)
 
     def _succeeds(
