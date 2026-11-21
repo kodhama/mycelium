@@ -539,15 +539,17 @@ class Bindings:
         """KC6's third exception (F4): a superseded row still the holder of its name,
         seen with that launch name in the name's `lease_pid` while KC5(b2) keeps the
         lease in force there, is the /resume back in the process that superseded it,
-        and is decided again."""
-        if row.name is None or event.launch.name != row.name:
+        and is decided again. A nameless successor that became the holder points at no
+        name, and counts the same (KC5(b))."""
+        name = event.launch.name
+        if name is None or row.name not in (name, None):
             return False
-        record = self._name(row.name)
+        record = self._name(name)
         if record is None or record.holder != row.key:
             return False
         if event.caller.pid is None or event.caller.pid != record.lease_pid:
             return False
-        return self._lease_pid_keeps(record, row, context.claim(row.name), context)
+        return self._lease_pid_keeps(record, row, context.claim(name), context)
 
     def _held_in_process(self, row: Binding, caller: Caller, context: Context) -> bool:
         """Whether a session of the caller's own process holds the row's name, current."""
@@ -597,7 +599,7 @@ class Bindings:
         if name is None:
             found = replace(found, reason=event.launch.reason)
             if not caller.nested and event.source != "fork" and caller.pid is not None:
-                found = self._succeed_nameless(found, own, context)
+                found = self._succeed_nameless(found, row, own, context)
         elif caller.nested:
             found = replace(found, reason=NESTED)
         elif event.source == "fork":
@@ -755,22 +757,29 @@ class Bindings:
         )
 
     def _succeed_nameless(
-        self, found: Binding, own: Sequence[Binding], context: Context
+        self, found: Binding, row: Binding | None, own: Sequence[Binding], context: Context
     ) -> Binding:
         """KC4 with no launch name: under a lease in force whose nonce is the name's, the
         caller becomes the holder of the name its process's holder held, unbound and
         nameless, so the lease stays in force through it (limit F3). With no such lease
-        nothing passes."""
+        nothing passes. A session still bound to another name, or kept out of this one,
+        never succeeds: it supersedes the holder as a non-heir (F4)."""
         for other in own:
             for record in self._held_by(other.key):
                 if other.name not in (record.name, None):
+                    continue
+                if found.name not in (None, record.name):
+                    continue
+                kept_out = record.held_boot == context.boot and self._held_since(
+                    row, found, record.epoch, context.boot
+                )
+                if found.name == record.name and kept_out:
                     continue
                 claim = context.claim(record.name)
                 if claim.nonce != record.nonce or not self._in_force(record, claim, None, context):
                     continue
                 self._set_holder(record.name, found.key)
-                if found.name in (None, record.name):
-                    found = replace(found, seen_holds=record.epoch)
+                found = replace(found, seen_holds=record.epoch)
         return found
 
     @staticmethod

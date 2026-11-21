@@ -2163,3 +2163,70 @@ def test_a_name_no_longer_declared_reads_undeclared_at_its_next_session_start(wo
     world.declared.discard(SCRATCH)
     assert world.bind(A, launch=SCRATCH, source="resume").binding.declared is False
     assert names(world)[SCRATCH].declared is False
+
+
+# Review fixes at 714ab9a (floor code-review, ce-code-review, ce-doc-review).
+
+
+def test_a_nameless_start_of_a_session_bound_elsewhere_leaves_the_lease_with_the_holder(world):
+    # KC4: only a nameless successor holds N; one still pointing at M is a non-heir, so
+    # the holder keeps N's lease through lease_pid (F4) instead of letting it lapse.
+    world.claim(name=M, nonce="m1")
+    assert world.bind(claude(3003, "s-c"), launch=M).binding.state == "provisional"
+    _holder_with_a_live_lease(world)
+    moved = world.bind(claude(P, "s-c"), launch=NO_NAME, source="resume")
+    assert (moved.binding.name, [old.session_id for old in moved.superseded]) == (M, ["s-a"])
+    assert (_record(world).holder, _record(world).lease_pid) == (("claude", "s-a"), P)
+    assert world.bind(claude(5005, "s-x")).binding.state == "provisional"
+
+
+def test_a_kept_out_session_never_succeeds_through_a_nameless_start(world):
+    # KC4: a kept-out row never succeeds to the name it is kept out of, named or not.
+    t = claude(4004, "s-t")
+    world.bind(t)  # generation 1
+    world.bind(t, launch=RENAMED, source="resume")  # G2
+    _holder_with_a_live_lease(world)  # A holds N since
+    world.bind(claude(P, "s-t"), launch=NO_NAME, source="resume")
+    assert _record(world).holder == ("claude", "s-a")
+    again = world.bind(claude(P, "s-t"), source="resume").binding
+    assert (again.state, again.reason) == ("unbound", bindings.HELD_SINCE.format(name=N))
+
+
+def test_a_superseded_nameless_successor_named_back_in_the_lease_pid_is_heir(world):
+    # KC6's third exception: the holder need not point at N, only at N or no name.
+    _holder_with_a_live_lease(world)
+    t = claude(P, "s-t")
+    world.bind(t, launch=NO_NAME, source="clear")
+    world.bind(A, source="resume")  # X10: A stays superseded and supersedes T
+    assert _record(world).lease_pid == P
+    named = world.bind(t, source="resume")
+    assert (named.binding.state, named.binding.nonce) == ("current", "n1")
+    assert [old.session_id for old in named.superseded] == []  # A was already superseded
+    assert (_record(world).holder, _record(world).lease_pid) == (("claude", "s-t"), None)
+
+
+@pytest.mark.parametrize(
+    ("caller", "source"),
+    [
+        (claude(P, "s-f"), "fork"),
+        (Caller("claude", P, "s-n", True, "walk", None), "clear"),
+    ],
+    ids=["fork", "nested"],
+)
+def test_a_fork_or_nested_session_never_succeeds_with_no_launch_name(world, caller, source):
+    _holder_with_a_live_lease(world)
+    world.bind(caller, launch=NO_NAME, source=source)
+    assert (_record(world).holder, _record(world).lease_pid) == (("claude", "s-a"), P)
+    assert world.bind(claude(5005, "s-x")).binding.state == "provisional"
+
+
+def test_a_pidless_caller_is_never_heir_as_a_superseded_holder(world):
+    # A holder stays superseded only after an own-process supersede, which needs a pid,
+    # so no bind reaches this; the gate still refuses a pid-less match on lease_pid None.
+    holder = codex_tui("t-h")
+    world.bind(holder)
+    world.store._db.execute("UPDATE bindings SET state = 'superseded' WHERE session_id = 't-h'")
+    record = replace(_record(world), nonce="n1", lease_pid=None)
+    row = world.resolve(holder).binding
+    claim = lease.Claim("pending", nonce="n1", boot=BOOT, expires=NOW + DAY)
+    assert world.store._heir(record, claim, row, holder, world.context()) is False
