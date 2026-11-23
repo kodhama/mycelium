@@ -830,7 +830,8 @@ source, and keeps a fork or nested origin across a reboot.
   "Provisional under the lease if named" held only while the lease was in
   force, and that case is gone with A118's. And the lease through the
   holder's own row lasts only while that row runs.
-- **A kept-out session or a fork never becomes a nameless successor.** A
+- **A kept-out session becomes a nameless successor only as the `/resume`
+  back, and a fork or nested session never does.** A
   session started with no launch name succeeds the holder only if its
   sighting doesn't keep it out of the name, whatever its row points at, or
   if it is the `/resume` back above, and never as a fork or nested session.
@@ -864,3 +865,21 @@ source, and keeps a fork or nested origin across a reboot.
     session that returns can't be told from a new one, so a later fork or
     nested decision of it would write an origin it should not have; one that
     was a fork or nested session keeps its existing row.
+  - **A holder resumed into a kept-out session's process lets it back**
+    (N1; pre-existing at fd75a6d; follow-up: GRO-82). K runs in pid Q,
+    kept out of N, or superseded there by an outsider that took N. N's
+    holder H is `/resume`d into Q, and A30 supersedes K. K is then
+    `/resume`d in Q: as the `/resume` back (superseded, this boot, named N,
+    last pid Q) it skips keep-out, and succeeds H as heir, current at N's
+    next generation with H's nonce n1 under a live claim. Keep-out can't
+    tell this from the A21 `/resume` back, because the row doesn't record
+    who superseded it. A review probe reproduced it in a variant with a
+    `/clear` in Q before H arrives.
+  - **The `/resume` back is judged by the row's last pid** (N2, introduced
+    in this slice; follow-up: GRO-82). The exemption reads "its own
+    process" as the pid the superseded row last ran in, and a re-confirm
+    rewrites that pid. So A holds N in pid P, a `/clear` in P makes C
+    current, A is resumed in another process (it stays superseded, and its
+    row now names that pid), and a `/resume` back to A in P is kept out of
+    N. Before this slice it was current. The A21 and X10 pins don't take
+    that detour and are unchanged.

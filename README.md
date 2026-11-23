@@ -163,7 +163,8 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   with its generation and lease, and a superseded one stays superseded. Two
   exceptions: a current session whose launch names now disagree is unbound,
   and a `/resume` back to a session its own process left makes it current
-  again at a new generation.
+  again at a new generation, unless that session was resumed in another
+  process in between: then it stays out (a known limit; follow-up: GRO-82).
 - **A superseded, kept-out, fork or nested session keeps its state at every
   SessionStart of the boot**, whatever its process or source, a new process
   started with source `startup` included, and under another herdr name too.
@@ -190,7 +191,10 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   they can take: a pending claim, or a live one naming them or another
   session of their own process. Resumed into the holder's own process, a
   session kept out of the name still stays out of it, though it supersedes
-  the holder there, since one process runs one session.
+  the holder there, since one process runs one session. One known limit,
+  older than this release: if the holder is resumed into such a session's
+  process, a `/resume` back to that session there takes the name, with the
+  lease (the record has the path; follow-up: GRO-82).
 - **A session decided again with no launch name keeps its old name**, as
   unbound. The directory shows it as `"state": "unbound"` unless a current
   binding under the name is shown first, and it never makes the name live or
