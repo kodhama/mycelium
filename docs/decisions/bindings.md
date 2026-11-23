@@ -727,3 +727,127 @@ U4.
   newer file is still refused.
 - **A missing name record now raises.** Every decision under a name makes
   its record first, so a write that finds none is a bug, not a silent no-op.
+
+## 2026-11-23 keep-out on the name record, and sticky states (U4c U4, GRO-81)
+
+The last U4c slice (hub plan
+`areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at `980a81c`, unit
+U4, with its U3 follow-ups and the A50 ruling) decides keep-out from the
+name's own store, makes sticky states hold for the boot at any pid or
+source, and keeps a fork or nested origin across a reboot.
+
+- **Sightings replace `seen_holds`.** A `sightings` row, keyed by (name,
+  harness, session id), holds a boot and an epoch. It is made at the
+  session's first decision that carries the name, with this boot and an
+  empty epoch. A later decision that carries the name and isn't kept out
+  moves its boot to this one. Its epoch is set to the name's `epoch` when the
+  session goes provisional, becomes current, adopts, or succeeds the holder
+  with no launch name under its lease, and it never falls. A decision with
+  no launch name never touches it, and a fork or nested decision only makes
+  it if absent. Sightings belong to the name: no rename, `/clear` or
+  `startup` rewrites or drops them (the PM's condition on the recorded
+  deviation, pinned by `test_a_session_rename_leaves_the_old_names_sightings_intact`).
+  Like name records and origins, sightings are never pruned: hub U5 may
+  prune rows only. Rows drop `seen_holds`; every `seen_holds` in the entries
+  above now means the sighting's epoch.
+- **The keep-out rule.** A session is kept out of a name when it is not the
+  name's holder, the name was last held in this boot, it has a sighting of
+  the name, and that sighting is from an earlier boot (after a reboot the
+  first session to hold the name keeps the others out, a never-holder
+  included) or has an epoch below the name's (someone held the name since
+  this session last held it or went provisional for it). A session with no
+  sighting, or with an empty epoch, such as one the unknown-nesting barrier
+  left unbound, is never kept out in its boot, as before.
+- **Succession comes first** (KC4; the lead's ruling, Option A of the U4 gap
+  list). A named decision checks process succession, computed without the
+  lease, then keep-out, then the holder decided again, then a fresh bind,
+  all through the lease gate. So the `/resume` back of the 2026-11-10 entry
+  still works: the superseded session is not the holder and its sighting is
+  behind, but it succeeds the session that holds the name in its own
+  process. A row kept out of this name in this boot, or unbound as a fork or
+  nested session, never succeeds.
+- **Sticky states hold for the boot.** A row of this boot that is
+  superseded, or unbound as a fork, a nested session or kept out, keeps its
+  state at every SessionStart, whatever its pid or source; a new pid with
+  source `startup` no longer decides it again. The exceptions are the ones
+  above: a kept-out row under a new herdr name binds fresh there; a
+  superseded row whose name a session of its own process now holds current
+  is decided again (the `/resume` back); and a superseded holder back named
+  for the role in its name's `lease_pid`, while that keeps the lease in
+  force, is decided again (F4). Current, provisional and other unbound rows
+  keep their continuation rule.
+- **Origins.** An `origins` row, keyed by session, records `fork` or
+  `nested` at the session's first decision ever, its first SessionStart as
+  this session id, and only when that decision is a fork or a nested one,
+  even with no launch name. It is never pruned, survives a reboot, and only
+  `adopt` clears it. Every decision reads it, a superseded row's included,
+  so a fork superseded in its own process and resumed back stays unbound and
+  never becomes the name's holder. A fork or nested decision is now unbound
+  with the fork or nested reason even with no launch name, so a fork first
+  seen with no name stays unbound once named. A session first decided as
+  neither gets no row: one restored nested later is unbound while nested,
+  and leaves no lasting mark.
+- **A50 and F2 ruled** (PM ruling, GRO-73 d62c86fe). A session's origin is a
+  fact about how that session id started, so a fork restored after a reboot,
+  and a nested session restored by a caller that is no longer nested, stay
+  unbound until they adopt. This rules the 2026-11-14 entry's "A fork
+  restored after a reboot becomes current", whose pin is flipped. It is the
+  one exception to "an earlier boot's row is a fresh start"; the row's other
+  sticky states still reset at a reboot.
+- **Fixed:** startup escape [G2] (A41, A42) and rename back [G1] (A46), each
+  pinned. Also fixed and pinned: a superseded session seen at a new pid with
+  `startup` stays superseded (A43), and so does a superseded lease holder,
+  whose lease follows the gate only (A118, N2); a nested session there stays
+  nested (A44); an earlier-boot session restored with no name stays out once
+  named (A121); a fork or nested session first seen with no name stays
+  unbound once named (A122); the nameless successor that lost the lease
+  between processes is kept out when it resumes named (X5's second half);
+  and a kept-out session whose row was deleted, as hub U5's pruning would,
+  stays out under the same session id (X11). This closes the U3 entry's
+  "Still open until U4".
+- **A118's wider case is closed.** The U3 entry says a `startup` at a new
+  pid decides F4's superseded holder again, after which the lease holds
+  through its own row past `lease_pid`'s process and its next named start is
+  current with the old nonce. Now it stays superseded at any pid, so the
+  lease lapses when `lease_pid`'s process ends. The pin assumes that pid is
+  not reused within the boot.
+- **Three corrections to the U3 entry.** "`lease_pid` is cleared whenever …
+  the holder moves": moves means the holding passes to another session.
+  "Provisional under the lease if named" held only while the lease was in
+  force, and that case is gone with A118's. And the lease through the
+  holder's own row lasts only while that row runs.
+- **A nameless successor is never kept out or a fork.** It succeeds the
+  holder only if its sighting doesn't keep it out of the name, whatever its
+  row points at, and never as a fork or nested session.
+- **One read of the claim per decision.** A locked `bind` or `adopt` reads
+  each name's claim file once and decides on that read.
+- **Schema 4.** A version-3 file is reset on open, as the U2 entry says,
+  with every bindings table (`bindings`, `generations`, `names`,
+  `sightings`, `origins`) dropped first. A newer file is still refused.
+- **Known limits, restated.**
+  - **Pid-less predecessor:** under a live claim, a pid-less predecessor
+    reads live, and its successor can't inherit or adopt the lease (the
+    2026-11-12 entry; plan U11).
+  - **A rename between SessionStarts goes unseen** until the next one (the
+    2026-11-10 G2 ruling).
+  - **Sticky states hold under a new herdr name too.** A superseded, fork or
+    nested row of this boot seen under another name keeps its state and its
+    old name; before, a new pid with `startup` bound it fresh there. So a
+    fork can no longer move to another name within its boot, except by
+    `adopt`. Only a kept-out row binds fresh under a new name.
+  - **Succession before keep-out reaches non-sticky rows.** A row that is
+    not sticky in this boot but whose sighting keeps it out, such as an
+    earlier-boot row, or a session renamed away and back or decided with no
+    launch name, resumed into the process of this boot's holder succeeds that
+    holder and takes the name at its next generation. Before this slice an
+    earlier-boot row there was kept out. The same holds in a superseded
+    holder's `lease_pid` while that keeps the lease in force: such a session,
+    named for the role, is heir. The U3 pin
+    `test_a_kept_out_session_never_succeeds_through_a_nameless_start` expects
+    that session kept out and fails at this head; the lead rules on it
+    (GRO-81).
+  - **First decision ever, for a pruned session.** An origin is written
+    only when a session has no row. Once hub U5 prunes rows, a pruned
+    session that returns can't be told from a new one, so a later fork or
+    nested decision of it would write an origin it should not have; one that
+    was a fork or nested session keeps its existing row.

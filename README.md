@@ -149,20 +149,25 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   without the nonce, such as a `/resume` onto a session whose binding
   continues, leaves the lease with the holder: it stays in force while that
   process runs or until grove's claim changes, and there the `/resume` back,
-  or a `/clear`, named for the role, takes it back. Only the session the
-  claim names, or the name's holder, keeps a lease in force, and only while
-  it runs (a superseded holder, while that process runs); another session's
-  old nonce never does. The record lists the gaps a later release
-  closes. A fork, or a session started inside another one, stays
-  unbound unless it adopts the nonce. With no lease in force, a fork
-  restored after a reboot before any session of the new boot holds the name
-  binds current (below).
+  or a `/clear`, named for the role, takes it back. A pending claim holds
+  until it expires. A live one stays in force only through the session the
+  claim names, or through the name's holder, and only while that process
+  runs (for a holder superseded in its own process, while that process
+  runs); another session's old nonce never does. A fork, or a session
+  started inside another one, stays unbound unless it adopts the nonce,
+  even one first seen with no launch name, and even restored after a reboot
+  by a caller that is no longer nested.
 - **A resume or compaction keeps the session's binding**, even in a new
   process, as when herdr restores a pane: a current session stays current
   with its generation and lease, and a superseded one stays superseded. Two
   exceptions: a current session whose launch names now disagree is unbound,
   and a `/resume` back to a session its own process left makes it current
   again at a new generation.
+- **A superseded, kept-out, fork or nested session keeps its state at every
+  SessionStart of the boot**, whatever its process or source, a new process
+  started with source `startup` included, and under another herdr name too.
+  The exceptions: a kept-out session binds fresh under a new herdr name, and
+  the `/resume` back above.
 - **A session unbound or provisional is decided again at its next
   SessionStart** (the lead's ruling on GRO-50, after KTD4). Under the same
   name, it keeps its generation if nobody else has held the name since, and
@@ -170,23 +175,22 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   session has held the name since, it stays unbound: re-running its hook
   can't take the role back, and only `mycelium adopt <nonce>` or a fresh
   session can. Under a new herdr name it binds fresh, at that name's next
-  generation. One known limit in the record lets it take the name back all
-  the same: a move to another herdr name and back (rename back).
+  generation; moved back, it is still kept out of the old one.
 - **After a reboot, the first session to bind a name holds it.** Every
   binding from the earlier boot is decided again, whatever its state, by the
-  usual rules: a lease or a caller of unknown nesting can still hold it back.
+  usual rules: a lease or a caller of unknown nesting can still hold it back,
+  and a fork or nested session stays unbound.
   Otherwise a session restored after a reboot is current, at the name's next
   generation if another session held the name after it, or its own if not.
   Once a session of the new boot holds the name, the others restored after
-  it stay out, as above, a fork included, for the rest of the boot (the
-  record lists the known gaps). They stay out even if that holder then
-  dies: they return only as a fresh session, or by `mycelium adopt <nonce>`
-  on a lease they can take: a pending claim, or a live one naming them or
-  another session of their own process. Two known limits in the record let
-  such a session take the name all the same: a move to another herdr name
-  and back (rename back), and, for one that never held the name nor went
-  provisional for it, such as a fork, a start in a new process with source
-  `startup` (startup escape).
+  it stay out, as above, for the rest of the boot, whatever process or name
+  they move through. They stay out even if that holder then dies: they
+  return only as a fresh session, or by `mycelium adopt <nonce>` on a lease
+  they can take: a pending claim, or a live one naming them or another
+  session of their own process. One known limit lets a session the record
+  would keep out take the name all the same: resumed into the holder's own
+  process while its binding is not marked kept out, it succeeds the holder
+  ([the record](docs/decisions/bindings.md) lists it).
 - **A session decided again with no launch name keeps its old name**, as
   unbound. The directory shows it as `"state": "unbound"` unless a current
   binding under the name is shown first, and it never makes the name live or

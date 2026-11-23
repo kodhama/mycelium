@@ -11,13 +11,21 @@ Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
   (its hook re-run in the same process, or its resume or compaction in any
   process of this boot) re-confirms the binding: it keeps its state,
   generation and nonce, takes the caller's pid and evidence, and passes the
-  G2 check. Unbound sessions other than forks and nested ones, provisional
-  ones, a superseded one whose name its own process now holds, and a
-  superseded holder back in its name's `lease_pid` are decided again instead.
+  G2 check. Unbound and provisional sessions are decided again instead.
+- **Sticky states hold for the boot** (U4c KC6): a superseded, fork, nested
+  or kept-out session is re-confirmed at every SessionStart of its boot,
+  whatever its pid or source, except a kept-out one under a new herdr name, a
+  superseded one whose name its own process now holds, and a superseded
+  holder back in its name's `lease_pid`. A fork or nested origin, recorded in
+  `origins` at the session's first decision, outlives a reboot until `adopt`.
 - **The lease** (U4c KC4, KC5): the name record holds the holder and its
   nonce. Under a live claim only the session it names, or the holder, keeps
   the lease in force; a holder superseded in its own process by a non-heir
   keeps it through `lease_pid` while that pid runs.
+- **Keep-out** (U4c KC3): each session's `sightings` of each name, which no
+  rename or restart rewrites, keep it out of a name another session has held
+  since it last held it or went provisional for it, or, after a reboot, since
+  the first holder of the new boot. Process succession is checked first.
 - **Generations, per name**, rise when a binding becomes current by a fresh
   start, a `/clear` or a `/resume` onto another session in the same process,
   or an adoption. A resume or compaction of the same session keeps its own, and
