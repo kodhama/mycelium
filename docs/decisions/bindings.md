@@ -866,17 +866,17 @@ source, and keeps a fork or nested origin across a reboot.
     nested decision of it would write an origin it should not have; one that
     was a fork or nested session keeps its existing row.
   - **A holder resumed into a kept-out session's process lets it back**
-    (N1; pre-existing at fd75a6d; follow-up: GRO-82). K runs in pid Q,
-    kept out of N, or superseded there by an outsider that took N. N's
-    holder H is `/resume`d into Q, and A30 supersedes K. K is then
-    `/resume`d in Q: as the `/resume` back (superseded, this boot, named N,
-    last pid Q) it skips keep-out, and succeeds H as heir, current at N's
-    next generation with H's nonce n1 under a live claim. Keep-out can't
-    tell this from the A21 `/resume` back, because the row doesn't record
-    who superseded it. A review probe reproduced it in a variant with a
-    `/clear` in Q before H arrives.
-  - **The `/resume` back is judged by the row's last pid** (N2, introduced
-    in this slice; follow-up: GRO-82). The exemption reads "its own
+    (pre-existing at fd75a6d; follow-up: GRO-82). K runs in pid Q, kept out
+    of N, or superseded there by an outsider that took N. N's holder H is
+    `/resume`d into Q, and A30 supersedes K if it was not superseded
+    already. K is then `/resume`d in Q: as the `/resume` back (superseded,
+    this boot, named N, last pid Q) it skips keep-out, and succeeds H:
+    current at N's next generation, with H's nonce n1 as heir under a live
+    claim, or with no lease at all. Keep-out can't tell this from the A21
+    `/resume` back, because the row doesn't record who superseded it. Review
+    probes reproduced it in both variants, here and at fd75a6d.
+  - **The `/resume` back is judged by the row's last pid** (introduced in
+    this slice; follow-up: GRO-82). The exemption reads "its own
     process" as the pid the superseded row last ran in, and a re-confirm
     rewrites that pid. So A holds N in pid P, a `/clear` in P makes C
     current, A is resumed in another process (it stays superseded, and its
