@@ -758,14 +758,19 @@ source, and keeps a fork or nested origin across a reboot.
   this session last held it or went provisional for it). A session with no
   sighting, or with an empty epoch, such as one the unknown-nesting barrier
   left unbound, is never kept out in its boot, as before.
-- **Succession comes first** (KC4; the lead's ruling, Option A of the U4 gap
-  list). A named decision checks process succession, computed without the
-  lease, then keep-out, then the holder decided again, then a fresh bind,
-  all through the lease gate. So the `/resume` back of the 2026-11-10 entry
-  still works: the superseded session is not the holder and its sighting is
-  behind, but it succeeds the session that holds the name in its own
-  process. A row kept out of this name in this boot, or unbound as a fork or
-  nested session, never succeeds.
+- **KC3 keep-out of a name gates succession to that name, except a
+  superseded row of this boot under KC6's first and third exceptions** (the
+  lead's ruling on D1, GRO-81). KC4's "a kept-out row never succeeds to the
+  name it is kept out of" is judged by the sighting, not by the row's
+  reason. The exempt rows are the `/resume` back of the 2026-11-10 entry,
+  whose sighting is behind but which succeeds the session that holds the
+  name in its own process, and F4's superseded holder back in `lease_pid`;
+  "succession is checked before keep-out" covers only those. So a session
+  kept out of the name, resumed into its holder's process, stays out, and
+  the holder is superseded there as by any non-heir (A30). Keep-out is per
+  name: a session kept out of one name still succeeds the holder of
+  another in that holder's process. A fork or nested session never
+  succeeds.
 - **Sticky states hold for the boot.** A row of this boot that is
   superseded, or unbound as a fork, a nested session or kept out, keeps its
   state at every SessionStart, whatever its pid or source; a new pid with
@@ -830,22 +835,16 @@ source, and keeps a fork or nested origin across a reboot.
     2026-11-12 entry; plan U11).
   - **A rename between SessionStarts goes unseen** until the next one (the
     2026-11-10 G2 ruling).
-  - **Sticky states hold under a new herdr name too.** A superseded, fork or
-    nested row of this boot seen under another name keeps its state and its
-    old name; before, a new pid with `startup` bound it fresh there. So a
-    fork can no longer move to another name within its boot, except by
-    `adopt`. Only a kept-out row binds fresh under a new name.
-  - **Succession before keep-out reaches non-sticky rows.** A row that is
-    not sticky in this boot but whose sighting keeps it out, such as an
-    earlier-boot row, or a session renamed away and back or decided with no
-    launch name, resumed into the process of this boot's holder succeeds that
-    holder and takes the name at its next generation. Before this slice an
-    earlier-boot row there was kept out. The same holds in a superseded
-    holder's `lease_pid` while that keeps the lease in force: such a session,
-    named for the role, is heir. The U3 pin
-    `test_a_kept_out_session_never_succeeds_through_a_nameless_start` expects
-    that session kept out and fails at this head; the lead rules on it
-    (GRO-81).
+  - **Sticky states hold under a new herdr name too** (the plan's Risks). A
+    superseded or fork row, or a nested one, seen at a new-pid `startup`
+    under another herdr name now stays as it is, with its old name, where
+    before it bound fresh under the new name. So a fork can no longer move
+    to another name within its boot, except by `adopt`. Only a kept-out row
+    binds fresh under a new name.
+  - **A reused pid reads live** (pre-existing; the 2026-11-10 liveness
+    entry). Liveness checks only that the pid runs under the harness's name,
+    so another process of the same harness that reuses a dead binding's pid
+    within the boot reads as that binding's process.
   - **First decision ever, for a pruned session.** An origin is written
     only when a session has no row. Once hub U5 prunes rows, a pruned
     session that returns can't be told from a new one, so a later fork or

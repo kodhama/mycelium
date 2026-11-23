@@ -187,10 +187,9 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   they move through. They stay out even if that holder then dies: they
   return only as a fresh session, or by `mycelium adopt <nonce>` on a lease
   they can take: a pending claim, or a live one naming them or another
-  session of their own process. One known limit lets a session the record
-  would keep out take the name all the same: resumed into the holder's own
-  process while its binding is not marked kept out, it succeeds the holder
-  ([the record](docs/decisions/bindings.md) lists it).
+  session of their own process. Resumed into the holder's own process, a
+  session kept out of the name still stays out of it, though it supersedes
+  the holder there, since one process runs one session.
 - **A session decided again with no launch name keeps its old name**, as
   unbound. The directory shows it as `"state": "unbound"` unless a current
   binding under the name is shown first, and it never makes the name live or
