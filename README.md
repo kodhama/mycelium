@@ -153,10 +153,11 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   until it expires. A live one stays in force only through the session the
   claim names, or through the name's holder, and only while that process
   runs (for a holder superseded in its own process, while that process
-  runs); another session's old nonce never does. A fork, or a session
-  started inside another one, stays unbound unless it adopts the nonce,
-  even one first seen with no launch name, and even restored after a reboot
-  by a caller that is no longer nested.
+  runs); another session's old nonce never does. The record lists the known
+  limits, such as a pid-less predecessor, or a reused pid, reading live. A
+  fork, or a session started inside another one, stays unbound unless it
+  adopts the nonce, even one first seen with no launch name, and even
+  restored after a reboot by a caller that is no longer nested.
 - **A resume or compaction keeps the session's binding**, even in a new
   process, as when herdr restores a pane: a current session stays current
   with its generation and lease, and a superseded one stays superseded. Two

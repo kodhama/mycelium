@@ -743,8 +743,9 @@ source, and keeps a fork or nested origin across a reboot.
   moves its boot to this one. Its epoch is set to the name's `epoch` when the
   session goes provisional, becomes current, adopts, or succeeds the holder
   with no launch name under its lease, and it never falls. A decision with
-  no launch name never touches it, and a fork or nested decision only makes
-  it if absent. Sightings belong to the name: no rename, `/clear` or
+  no launch name never touches it, except a nameless succession (KC4), which
+  sets it at the record's epoch, and a fork or nested decision only makes it
+  if absent. Sightings belong to the name: no rename, `/clear` or
   `startup` rewrites or drops them (the PM's condition on the recorded
   deviation, pinned by `test_a_session_rename_leaves_the_old_names_sightings_intact`).
   Like name records and origins, sightings are never pruned: hub U5 may
@@ -758,19 +759,25 @@ source, and keeps a fork or nested origin across a reboot.
   this session last held it or went provisional for it). A session with no
   sighting, or with an empty epoch, such as one the unknown-nesting barrier
   left unbound, is never kept out in its boot, as before.
-- **KC3 keep-out of a name gates succession to that name, except a
-  superseded row of this boot under KC6's first and third exceptions** (the
-  lead's ruling on D1, GRO-81). KC4's "a kept-out row never succeeds to the
-  name it is kept out of" is judged by the sighting, not by the row's
-  reason. The exempt rows are the `/resume` back of the 2026-11-10 entry,
-  whose sighting is behind but which succeeds the session that holds the
-  name in its own process, and F4's superseded holder back in `lease_pid`;
-  "succession is checked before keep-out" covers only those. So a session
-  kept out of the name, resumed into its holder's process, stays out, and
-  the holder is superseded there as by any non-heir (A30). Keep-out is per
-  name: a session kept out of one name still succeeds the holder of
-  another in that holder's process. A fork or nested session never
-  succeeds.
+- **KC3 keep-out of a name gates succession to that name** (the lead's
+  ruling on D1, GRO-81, narrowed in review). KC4's "a kept-out row never
+  succeeds to the name it is kept out of" is judged by the sighting, not by
+  the row's reason. The one exemption is the `/resume` back of the
+  2026-11-10 entry: a superseded row of this boot resumed into its own
+  process under its own name. Its sighting is behind, but it succeeds the
+  session that now holds the name there, named, or nameless under that
+  session's lease. "Succession is checked before keep-out" covers only that.
+  A superseded holder back named for the role in its name's `lease_pid`
+  needs no exemption, since keep-out never applies to the name's holder.
+  So a session kept out of a name stays out of it when resumed into another
+  process, the holder's included, and when resumed back under a name other
+  than its own; a superseded one too. In the holder's process it still
+  supersedes the holder, as any non-heir does (A30), and nobody is current.
+  This changes one outcome from before this slice: a session an outsider
+  took the name from, resumed into the outsider's process, was current at
+  the next generation, and is now kept out. Keep-out is per name: a session
+  kept out of one name still succeeds the holder of another in that
+  holder's process. A fork or nested session never succeeds.
 - **Sticky states hold for the boot.** A row of this boot that is
   superseded, or unbound as a fork, a nested session or kept out, keeps its
   state at every SessionStart, whatever its pid or source; a new pid with
@@ -790,13 +797,15 @@ source, and keeps a fork or nested origin across a reboot.
   never becomes the name's holder. A fork or nested decision is now unbound
   with the fork or nested reason even with no launch name, so a fork first
   seen with no name stays unbound once named. A session first decided as
-  neither gets no row: one restored nested later is unbound while nested,
-  and leaves no lasting mark.
+  neither gets no row: one restored nested later stays nested-unbound for
+  the rest of the boot (its reason is the nested one, which is sticky), but
+  leaves no mark past a reboot.
 - **A50 and F2 ruled** (PM ruling, GRO-73 d62c86fe). A session's origin is a
   fact about how that session id started, so a fork restored after a reboot,
   and a nested session restored by a caller that is no longer nested, stay
-  unbound until they adopt. This rules the 2026-11-14 entry's "A fork
-  restored after a reboot becomes current", whose pin is flipped. It is the
+  unbound until they adopt. This rules "A fork restored after a reboot
+  becomes current", in the entry "2026-11-14 limit labels, a date and a
+  correction", whose pin is flipped. It is the
   one exception to "an earlier boot's row is a fresh start"; the row's other
   sticky states still reset at a reboot.
 - **Fixed:** startup escape [G2] (A41, A42) and rename back [G1] (A46), each
@@ -821,9 +830,12 @@ source, and keeps a fork or nested origin across a reboot.
   "Provisional under the lease if named" held only while the lease was in
   force, and that case is gone with A118's. And the lease through the
   holder's own row lasts only while that row runs.
-- **A nameless successor is never kept out or a fork.** It succeeds the
-  holder only if its sighting doesn't keep it out of the name, whatever its
-  row points at, and never as a fork or nested session.
+- **A kept-out session or a fork never becomes a nameless successor.** A
+  session started with no launch name succeeds the holder only if its
+  sighting doesn't keep it out of the name, whatever its row points at, or
+  if it is the `/resume` back above, and never as a fork or nested session.
+- **The sunset's hooks.** The 2026-11-15 entry's "the first release that
+  ships the hooks (hub U8)" means the Claude hook, U8, as README says.
 - **One read of the claim per decision.** A locked `bind` or `adopt` reads
   each name's claim file once and decides on that read.
 - **Schema 4.** A version-3 file is reset on open, as the U2 entry says,
@@ -839,8 +851,10 @@ source, and keeps a fork or nested origin across a reboot.
     superseded or fork row, or a nested one, seen at a new-pid `startup`
     under another herdr name now stays as it is, with its old name, where
     before it bound fresh under the new name. So a fork can no longer move
-    to another name within its boot, except by `adopt`. Only a kept-out row
-    binds fresh under a new name.
+    to another name within its boot, except by `adopt`. Two rows are still
+    decided under a new launch name: a kept-out row, which binds fresh
+    there, and a superseded row brought back because a session of its own
+    process holds its name, which is decided under the name it now has.
   - **A reused pid reads live** (pre-existing; the 2026-11-10 liveness
     entry). Liveness checks only that the pid runs under the harness's name,
     so another process of the same harness that reuses a dead binding's pid
