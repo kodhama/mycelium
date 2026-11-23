@@ -34,6 +34,7 @@ Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
   a pid-less one is live, unverified, for its boot until superseded.
 """
 
+import functools
 import sqlite3
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -47,7 +48,7 @@ from mycelium.launch import Launch
 from mycelium.store import files
 from mycelium.topology import MAINTAINER
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 BUSY_TIMEOUT_SECONDS = 30
 SOURCES = ("startup", "resume", "compact", "clear", "fork")
 """SessionStart sources, as Claude names them; U11 maps Codex's onto these."""
@@ -77,7 +78,6 @@ _SCHEMA = (
         reason TEXT,
         bound_at REAL NOT NULL,
         last_seen REAL NOT NULL,
-        seen_holds INTEGER,
         PRIMARY KEY (harness, session_id)
     )""",
     "CREATE INDEX IF NOT EXISTS bindings_by_name ON bindings (name)",
@@ -94,25 +94,38 @@ _SCHEMA = (
         nonce TEXT,
         lease_pid INTEGER
     )""",
+    """CREATE TABLE IF NOT EXISTS sightings (
+        name TEXT NOT NULL,
+        harness TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        boot TEXT NOT NULL,
+        epoch INTEGER,
+        PRIMARY KEY (name, harness, session_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS origins (
+        harness TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        origin TEXT NOT NULL,
+        PRIMARY KEY (harness, session_id)
+    )""",
 )
 _RESET = tuple(
-    f"DROP TABLE IF EXISTS {table}" for table in ("bindings", "generations", "names", "sightings")
+    f"DROP TABLE IF EXISTS {table}"
+    for table in ("bindings", "generations", "names", "sightings", "origins")
 )
-"""Every bindings table any schema version made, or U4 will make (`sightings`):
-an older file starts empty (KC7).
+"""Every bindings table any schema version made: an older file starts empty (KC7).
 
 Safe only while no released mycelium writes binding rows; the first release
 that ships the hooks (hub U8) ends it, and later versions migrate or refuse."""
 _COLUMNS = (
-    "harness, session_id, name, pid, evidence, boot, generation,"
-    " state, reason, bound_at, last_seen, seen_holds"
+    "harness, session_id, name, pid, evidence, boot, generation, state, reason, bound_at, last_seen"
 )
 _FIELDS = (
     "b.harness, b.session_id, b.name, COALESCE(n.declared, 0), b.pid, b.evidence, b.boot,"
     " b.generation, b.state, b.reason,"
     " CASE WHEN n.holder_harness = b.harness AND n.holder_session = b.session_id"
     " THEN n.nonce END,"
-    " b.bound_at, b.last_seen, b.seen_holds"
+    " b.bound_at, b.last_seen"
 )
 _ROWS = "bindings AS b LEFT JOIN names AS n ON n.name = b.name"
 """A session row with its name's `declared` and, for the name's holder, its nonce:
@@ -153,12 +166,6 @@ class Binding:
     name record holds it (U4c KC9)."""
     bound_at: float
     last_seen: float
-    seen_holds: int | None = None
-    """The name's hold count (`NameRecord.epoch`) when the binding last held it or
-    went provisional for it; None if neither. Every binding that becomes current
-    for the name raises the count, even one that keeps its generation, so nobody
-    else has held the name since while the count still equals it (lead ruling,
-    GRO-50)."""
 
     @property
     def key(self) -> tuple[str, str]:
@@ -240,8 +247,10 @@ class Context:
     to BUSY_TIMEOUT_SECONDS; None keeps `now`."""
 
     def locked(self) -> "Context":
-        """This context with the time read again, for use once the write lock is held."""
-        return self if self.clock is None else replace(self, now=self.clock())
+        """This context for one decision under the write lock: the time read again
+        (KC8), and each name's claim read once, so the decision rests on one read."""
+        now = self.now if self.clock is None else self.clock()
+        return replace(self, now=now, claim=functools.cache(self.claim))
 
 
 @dataclass(frozen=True)
@@ -436,6 +445,7 @@ class Bindings:
             raise Refused("another session holds the live lease")
         if row.state == "current" and row.nonce == nonce:  # A78: the holder, adopting again
             return Bound(self._put(replace(row, last_seen=context.now)))
+        self._db.execute("DELETE FROM origins WHERE harness = ? AND session_id = ?", row.key)
         generation = self._next_generation(row.name)
         found = replace(
             row,
@@ -490,29 +500,30 @@ class Bindings:
     def _continues(self, row: Binding, event: Event, context: Context) -> bool:
         """Whether this SessionStart continues the row's session, which keeps its binding.
 
-        The same session in the same process (a hook re-run), or a resume or
-        compaction of it in any process of this boot (herdr restores a pane with
-        `claude --resume`). Re-decided instead: an earlier boot's row, an unbound
-        session other than a fork or a nested one, a provisional one (its lease may
-        have ended), and a superseded one whose name another session of the caller's
-        own process now holds (a /resume back, lessons G3)."""
+        A sticky row of this boot, superseded or unbound as a fork, nested or kept
+        out, keeps its state at every SessionStart, whatever its pid or source (KC6),
+        except a kept-out row under a new herdr name, a superseded row whose name
+        another session of the caller's own process now holds (a /resume back,
+        lessons G3), and a superseded holder back in its name's `lease_pid` (F4).
+        Any other row continues for the same session in the same process (a hook
+        re-run), or a resume or compaction of it in any process of this boot (herdr
+        restores a pane with `claude --resume`), unless it is unbound or provisional
+        (its lease may have ended). An earlier boot's row never continues."""
         caller = event.caller
         if row.boot != context.boot:
             return False
-        if row.pid != caller.pid and event.source not in _CONTINUES:
-            return False
-        if row.state == "unbound":
-            if row.reason == HELD_SINCE.format(name=row.name):
-                # Kept out stays out in this boot, unless a new herdr name binds it fresh.
-                return event.launch.name in (None, row.name)
-            return row.reason in _STAYS_UNBOUND
-        if row.state == "provisional":
-            return False
+        if row.state == "unbound" and row.reason == HELD_SINCE.format(name=row.name):
+            # Kept out stays out in this boot, unless a new herdr name binds it fresh.
+            return event.launch.name in (None, row.name)
+        if row.state == "unbound" and row.reason in _STAYS_UNBOUND:
+            return True
         if row.state == "superseded":
             if self._held_in_process(row, caller, context):
                 return False
             return not self._resumes_its_lease(row, event, context)
-        return True
+        if row.pid != caller.pid and event.source not in _CONTINUES:
+            return False
+        return row.state == "current"
 
     def _reconfirm(self, row: Binding, event: Event, context: Context) -> Bound:
         """Keep the state, generation and nonce; take the caller's pid and evidence."""
@@ -569,8 +580,7 @@ class Bindings:
         caller, name = event.caller, event.launch.name
         # A generation belongs to its name: a row decided under another name drops it.
         # With no launch name, the row keeps its own name, so a session that re-runs
-        # its hook while its names disagree neither loses its generation nor forgets
-        # who has held the name since (lead ruling, GRO-50).
+        # its hook while its names disagree keeps its generation (lead ruling, GRO-50).
         same = row is not None and row.name is not None and name in (None, row.name)
         decided_name = row.name if same else name
         # A SessionStart that carries the name makes its record, or rewrites `declared`.
@@ -594,16 +604,17 @@ class Bindings:
             nonce=None,  # the name record keeps the holder's nonce (KC9)
             bound_at=context.now if renamed else row.bound_at,
             last_seen=context.now,
-            seen_holds=row.seen_holds if same else None,
         )
-        if name is None:
+        origin = self._origin(row, event)
+        if origin is not None:
+            # A fork or nested session stays unbound, named or not, until it adopts.
+            found = replace(found, reason=NESTED if origin == "nested" else FORK)
+            if name is not None:
+                self._sight(name, found.key, context.boot, refresh=False)
+        elif name is None:
             found = replace(found, reason=event.launch.reason)
-            if not caller.nested and event.source != "fork" and caller.pid is not None:
-                found = self._succeed_nameless(found, row, own, context)
-        elif caller.nested:
-            found = replace(found, reason=NESTED)
-        elif event.source == "fork":
-            found = replace(found, reason=FORK)
+            if caller.pid is not None:
+                found = self._succeed_nameless(found, own, context)
         else:
             found = self._for_name(found, row, caller, context)
         if found.state == "current":
@@ -623,10 +634,12 @@ class Bindings:
             raise RuntimeError(f"no name record for {found.name}")
         claim = context.claim(found.name)
         record = self._lapse(record, claim, context)
-        holds = record.epoch
-        if record.held_boot == context.boot and self._held_since(row, found, holds, context.boot):
+        # Process succession comes before keep-out, so the /resume back works (KC4, A21).
+        succeeds = self._succession(record, row, caller, claim, context)
+        if not succeeds and self._kept_out(record, found.key, context.boot):
             # Another session holds the name now, and with it any lease it adopted.
             return replace(found, reason=HELD_SINCE.format(name=found.name))
+        self._sight(found.name, found.key, context.boot)
         # The caller's own row is judged with the caller's pid and the name being decided.
         mine = None
         if row is not None and row.boot == context.boot:
@@ -634,7 +647,8 @@ class Bindings:
         if self._in_force(record, claim, mine, context):
             if not self._heir(record, claim, row, caller, context):
                 reason = f"a lease holds {found.name}: adopt its nonce to become current"
-                return replace(found, state="provisional", reason=reason, seen_holds=holds)
+                self._sight(found.name, found.key, context.boot, record.epoch)
+                return replace(found, state="provisional", reason=reason)
             # A /clear or /resume in the process that holds the lease keeps the lease.
             found = replace(found, nonce=claim.nonce)
         else:
@@ -739,10 +753,12 @@ class Bindings:
         """KC4: process succession. The caller succeeds the name's holder when the holder
         runs in the caller's process and still points at the name or at none, or when
         the holder is superseded and the caller runs in its `lease_pid` under KC5(b2).
-        Forks and nested sessions never succeed; a kept-out row never reaches here."""
+        Forks and nested sessions never succeed (`_decide` reads their origin first),
+        nor does a row kept out of this name in this boot."""
         if caller.pid is None or caller.nested:
             return False
-        if row is not None and row.boot == context.boot and row.reason in _STAYS_UNBOUND:
+        sticky = (*_STAYS_UNBOUND, HELD_SINCE.format(name=record.name))
+        if row is not None and row.boot == context.boot and row.reason in sticky:
             return False
         if holder.name not in (record.name, None):
             return False  # it renamed away: the name's lease lapsed (X6)
@@ -756,52 +772,103 @@ class Bindings:
             and holder.boot == context.boot
         )
 
+    def _succession(
+        self,
+        record: NameRecord,
+        row: Binding | None,
+        caller: Caller,
+        claim: lease.Claim,
+        context: Context,
+    ) -> bool:
+        """Whether the caller succeeds the name's holder, another session (KC4)."""
+        holder = self._holder(record)
+        if holder is None or holder.key == (caller.harness, caller.session_id):
+            return False
+        return self._succeeds(record, holder, row, caller, claim, context)
+
     def _succeed_nameless(
-        self, found: Binding, row: Binding | None, own: Sequence[Binding], context: Context
+        self, found: Binding, own: Sequence[Binding], context: Context
     ) -> Binding:
         """KC4 with no launch name: under a lease in force whose nonce is the name's, the
         caller becomes the holder of the name its process's holder held, unbound and
         nameless, so the lease stays in force through it (limit F3). With no such lease
-        nothing passes. A session still bound to another name, or kept out of this one,
-        never succeeds: it supersedes the holder as a non-heir (F4)."""
+        nothing passes. A session still bound to another name, or kept out of this one
+        whatever its row points at (KC3), never succeeds: it supersedes the holder as a
+        non-heir (F4). A fork or nested session never gets here (`_decide`)."""
         for other in own:
             for record in self._held_by(other.key):
                 if other.name not in (record.name, None):
                     continue
                 if found.name not in (None, record.name):
                     continue
-                kept_out = record.held_boot == context.boot and self._held_since(
-                    row, found, record.epoch, context.boot
-                )
-                if found.name == record.name and kept_out:
+                if self._kept_out(record, found.key, context.boot):
                     continue
                 claim = context.claim(record.name)
                 if claim.nonce != record.nonce or not self._in_force(record, claim, None, context):
                     continue
                 self._set_holder(record.name, found.key)
-                found = replace(found, seen_holds=record.epoch)
+                self._sight(record.name, found.key, context.boot, record.epoch)
         return found
 
-    @staticmethod
-    def _held_since(row: Binding | None, found: Binding, holds: int, boot: str) -> bool:
-        """Whether another binding became current for the name after this unbound or
-        provisional session last held it or went provisional for it (lead ruling,
-        GRO-50; KTD4). Such a session stays out until it adopts the lease or starts
-        fresh: re-running its hook can't take the role back. The caller checks that
-        the name was last held in this boot: an earlier boot's holder keeps nobody
-        out, as a session that returns after a reboot starts fresh (lead overrule,
-        GRO-50). A row from an earlier boot, in any state, stays out the same way
-        once a session of this boot has held the name: after a reboot the first
-        session restored holds the role (ce-doc-review, GRO-50)."""
-        if row is None or row.name != found.name:
+    def _kept_out(self, record: NameRecord, key: tuple[str, str], boot: str) -> bool:
+        """KC3: the session stays out of the name until it adopts the lease or starts
+        fresh, when it is not the holder, the name was last held in this boot, and its
+        sighting of the name is from an earlier boot (after a reboot the first session
+        to hold the name keeps the others out) or has an epoch below the name's (another
+        session held the name since this one last held it or went provisional for it).
+        A session with no sighting, or one whose epoch is still empty, is never out."""
+        if record.held_boot != boot or record.holder == key:
             return False
-        if row.boot != boot:  # it never held the name, or held it before this holder
-            return True
-        return (
-            row.state in ("unbound", "provisional")
-            and found.seen_holds is not None
-            and found.seen_holds != holds
+        seen = self._db.execute(
+            "SELECT boot, epoch FROM sightings WHERE name = ? AND harness = ? AND session_id = ?",
+            (record.name, *key),
+        ).fetchone()
+        if seen is None:
+            return False
+        return seen[0] != boot or (seen[1] is not None and seen[1] < record.epoch)
+
+    def _sight(
+        self,
+        name: str,
+        key: tuple[str, str],
+        boot: str,
+        epoch: int | None = None,
+        *,
+        refresh: bool = True,
+    ) -> None:
+        """KC3: make the session's sighting of the name, at this boot, if it has none;
+        with `refresh`, move its boot to this one and its epoch up to `epoch`. Only the
+        name's own transitions call it, and an epoch never falls (I6)."""
+        update = (
+            "UPDATE SET boot = excluded.boot,"
+            " epoch = COALESCE(MAX(epoch, excluded.epoch), epoch, excluded.epoch)"
+            if refresh
+            else "NOTHING"
         )
+        self._db.execute(
+            "INSERT INTO sightings (name, harness, session_id, boot, epoch)"
+            f" VALUES (?, ?, ?, ?, ?) ON CONFLICT (name, harness, session_id) DO {update}",
+            (name, *key, boot, epoch),
+        )
+
+    def _origin(self, row: Binding | None, event: Event) -> str | None:
+        """`fork` or `nested`, by this SessionStart or by the session's `origins` row
+        (KC1): written at its first decision ever, kept across reboots and never pruned,
+        cleared only by `adopt`. A session first decided as neither gets no row."""
+        caller = event.caller
+        now = "nested" if caller.nested else "fork" if event.source == "fork" else None
+        if now is not None:
+            if row is None:
+                self._db.execute(
+                    "INSERT OR IGNORE INTO origins VALUES (?, ?, ?)",
+                    (caller.harness, caller.session_id, now),
+                )
+            return now
+        found = self._db.execute(
+            "SELECT origin FROM origins WHERE harness = ? AND session_id = ?",
+            (caller.harness, caller.session_id),
+        ).fetchone()
+        return None if found is None else found[0]
 
     def _make_current(
         self, found: Binding, context: Context, also: Sequence[Binding] = ()
@@ -816,8 +883,8 @@ class Bindings:
         )
         if done.rowcount != 1:
             raise RuntimeError(f"no name record for {found.name}")
-        holds = self._name(found.name).epoch
-        found = self._put(replace(found, seen_holds=holds))
+        self._sight(found.name, found.key, found.boot, self._name(found.name).epoch)
+        found = self._put(found)
         return Bound(found, self._supersede([*rivals, *also], found, context))
 
     def _rivals(self, found: Binding) -> list[Binding]:
@@ -920,14 +987,13 @@ class Bindings:
                 "UPDATE names SET bound_seen = ? WHERE name = ?", (row.last_seen, row.name)
             )
         self._db.execute(
-            f"INSERT INTO bindings ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            f"INSERT INTO bindings ({_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
             " ON CONFLICT (harness, session_id) DO UPDATE SET"
             " name = excluded.name, pid = excluded.pid,"
             " evidence = excluded.evidence, boot = excluded.boot,"
             " generation = excluded.generation, state = excluded.state,"
             " reason = excluded.reason,"
-            " bound_at = excluded.bound_at, last_seen = excluded.last_seen,"
-            " seen_holds = excluded.seen_holds",
+            " bound_at = excluded.bound_at, last_seen = excluded.last_seen",
             (
                 row.harness,
                 row.session_id,
@@ -940,7 +1006,6 @@ class Bindings:
                 row.reason,
                 row.bound_at,
                 row.last_seen,
-                row.seen_holds,
             ),
         )
         return self._get(row.harness, row.session_id)  # the view: nonce from the record

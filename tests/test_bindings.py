@@ -1230,28 +1230,35 @@ def test_after_a_reboot_a_kept_out_session_stays_out_when_the_first_holder_dies(
 
 
 @pytest.mark.parametrize(
-    ("caller", "launch", "state", "superseded"),
+    ("caller", "launch", "origin"),
     [
-        (claude(1500, "s-a"), NO_NAME, "unbound", []),
-        (Caller("claude", 1500, "s-a", True, "walk", None), "ogham-worker", "unbound", []),
-        (claude(3500, "s-fork"), "ogham-worker", "current", ["s-a"]),
+        (claude(1500, "s-a"), NO_NAME, None),
+        (Caller("claude", 1500, "s-a", True, "walk", None), "ogham-worker", None),
+        (claude(3500, "s-fork"), "ogham-worker", "fork"),
+        (Caller("codex", 8500, "t-nested", False, "walk", None), "ogham-worker", "nested"),
     ],
-    ids=["no name", "nested", "fork"],
+    ids=["no name", "nested", "fork", "nested origin"],
 )
-def test_after_a_reboot_no_name_fork_and_nested_rules_still_apply(
-    world, caller, launch, state, superseded
-):
+def test_after_a_reboot_no_name_fork_and_nested_rules_still_apply(world, caller, launch, origin):
     # A50 (ruling 4): with no holder in the new boot, a restored session is decided again,
-    # and the no-name and nesting rules come before the name's. The fork clause differs
-    # today: a fork restored by `resume` is decided as a fresh start and becomes current
-    # (reported on GRO-74; the matrix row expected it to stay unbound).
+    # and the no-name and nesting rules come before the name's. Changed in U4 (PM ruling,
+    # GRO-73 d62c86fe): a session's origin outlives a reboot, so a fork restored by
+    # `resume`, and a nested session restored by a caller no longer nested (F2), stay
+    # unbound; U1 pinned the fork current. Only `adopt` brings either back.
     world.bind(A)
     world.bind(claude(3003, "s-fork"), source="fork")
+    world.bind(nested_codex("t-nested"))
     world.boot = "boot-after"
     world.alive.clear()
     found = world.bind(caller, launch=launch, source="resume")
-    assert found.binding.state == state
-    assert [old.session_id for old in found.superseded] == superseded
+    assert found.binding.state == "unbound"
+    assert found.superseded == ()
+    assert _record(world).holder == ("claude", "s-a")  # nobody holds N in the new boot
+    if origin is not None:
+        assert _origin(world, caller.session_id, caller.harness) == origin
+        world.claim(nonce="n1", boot="boot-after")
+        assert world.adopt(caller, "n1").binding.state == "current"
+        assert _origin(world, caller.session_id, caller.harness) is None
 
 
 @pytest.mark.parametrize("claim_state", ["pending", "live"])
@@ -1680,7 +1687,7 @@ def test_a_version_one_bindings_file_opens_at_the_current_version_with_empty_tab
             found
             for (found,) in store._db.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
-        assert tables == {"bindings", "names"}
+        assert tables == {"bindings", "names", "sightings", "origins"}
         assert store._db.execute("PRAGMA user_version").fetchone() == (bindings.SCHEMA_VERSION,)
     finally:
         store.close()
@@ -1887,6 +1894,11 @@ def test_a_successor_away_between_processes_loses_the_lease(world):
     world.alive.discard(P)
     assert world.bind(claude(3003, "s-c")).binding.state == "current"
     assert (_record(world).holder, _record(world).nonce) == (("claude", "s-c"), None)
+    # U4's half: resumed named later, the successor is kept out (KC3).
+    back = world.bind(claude(1500, "s-t"), source="resume")
+    assert (back.binding.state, back.superseded) == ("unbound", ())
+    assert back.binding.reason == bindings.HELD_SINCE.format(name=N)
+    assert _record(world).holder == ("claude", "s-c")
 
 
 def test_a_nameless_successor_never_revives_a_lease_its_holder_left(world):
@@ -2051,7 +2063,7 @@ def test_adopting_another_name_in_the_holders_pid_keeps_the_lease(world):
     assert world.bind(claude(3003, "s-c")).binding.state == "provisional"
 
 
-# KC7: schema 3 resets a version-2 file.
+# KC7: a version-2 file is reset (U3's bump; still reset at every later version).
 
 _SCHEMA_2 = (
     """CREATE TABLE bindings (harness TEXT NOT NULL, session_id TEXT NOT NULL, name TEXT,
@@ -2079,7 +2091,7 @@ def _columns(db, table):
     return {row[1] for row in db.execute(f"PRAGMA table_info({table})")}
 
 
-def test_a_version_two_bindings_file_opens_as_version_three_with_every_table_recreated(
+def test_a_version_two_bindings_file_opens_at_the_current_version_with_every_table_recreated(
     tmp_path,
 ):
     path = tmp_path / "bindings.sqlite3"
@@ -2091,10 +2103,9 @@ def test_a_version_two_bindings_file_opens_as_version_three_with_every_table_rec
             store._db, "names"
         )
         assert "nonce" not in _columns(store._db, "bindings")
-        assert store._db.execute("PRAGMA user_version").fetchone() == (3,)
+        assert store._db.execute("PRAGMA user_version").fetchone() == (bindings.SCHEMA_VERSION,)
     finally:
         store.close()
-    assert bindings.SCHEMA_VERSION == 3
 
 
 def _open_and_bind(path, session):
@@ -2127,7 +2138,7 @@ def test_two_opens_racing_over_a_version_two_file_reset_it_once(tmp_path):
     store = bindings.open_bindings(path)
     try:
         assert sorted(row.session_id for row in store.rows()) == ["s-71", "s-72"]
-        assert store._db.execute("PRAGMA user_version").fetchone() == (3,)
+        assert store._db.execute("PRAGMA user_version").fetchone() == (bindings.SCHEMA_VERSION,)
     finally:
         store.close()
 
@@ -2230,3 +2241,319 @@ def test_a_pidless_caller_is_never_heir_as_a_superseded_holder(world):
     row = world.resolve(holder).binding
     claim = lease.Claim("pending", nonce="n1", boot=BOOT, expires=NOW + DAY)
     assert world.store._heir(record, claim, row, holder, world.context()) is False
+
+
+# U4c U4: keep-out on the name record, and sticky states (plan U4, KC3, KC6; the A50 and
+# F2 ruling, GRO-73 d62c86fe; A118's wider case, kodhama-pm 11-21).
+
+
+def _sighting(world, session, name=N, harness="claude"):
+    """The session's sighting of the name: (boot, epoch), or None (KC3)."""
+    return world.store._db.execute(
+        "SELECT boot, epoch FROM sightings WHERE name = ? AND harness = ? AND session_id = ?",
+        (name, harness, session),
+    ).fetchone()
+
+
+def _origin(world, session, harness="claude"):
+    found = world.store._db.execute(
+        "SELECT origin FROM origins WHERE harness = ? AND session_id = ?", (harness, session)
+    ).fetchone()
+    return None if found is None else found[0]
+
+
+def test_a_superseded_holder_seen_at_a_new_pid_with_startup_never_outlives_lease_pid(world):
+    # A118's wider case: F4's superseded holder stays superseded at any pid (KC6), so no
+    # row of it keeps N's lease past lease_pid's process. Assumes P's pid is not reused
+    # within the boot (pid reuse is the liveness check's own question, plan U4 step 8).
+    _non_heir_resumes_into_p(world)
+    for launch in (NO_NAME, N):
+        found = world.bind(claude(1600, "s-a"), launch=launch, source="startup")
+        assert found.binding.state == "superseded"
+        assert _record(world).lease_pid == P
+    world.alive.discard(P)
+    assert world.bind(claude(3003, "s-c")).binding.state == "current"
+    assert (_record(world).nonce, _record(world).lease_pid) == (None, None)
+    for pid in (1600, 1700):
+        again = world.bind(claude(pid, "s-a"), source="startup").binding
+        assert (again.state, again.nonce) == ("superseded", None)
+
+
+def test_a_session_rename_leaves_the_old_names_sightings_intact(world):
+    # The PM's condition on OQ3: sightings belong to the name; no rename, clear or startup
+    # path rewrites or drops them, and only the name's own transitions move them.
+    world.bind(A)
+    assert _sighting(world, "s-a") == (BOOT, 1)
+    world.bind(A, launch=RENAMED, source="resume")
+    world.bind(A, launch=M, source="resume")  # A now holds M
+    assert _sighting(world, "s-a") == (BOOT, 1)
+    world.bind(B)  # B takes N
+    world.bind(A, source="resume")  # G2 under M
+    back = world.bind(A, source="resume").binding  # decided under N again
+    assert (back.state, back.reason) == ("unbound", bindings.HELD_SINCE.format(name=N))
+    assert _sighting(world, "s-a") == (BOOT, 1)
+    assert _sighting(world, "s-a", name=M) == (BOOT, 1)
+
+
+def test_a_kept_out_session_whose_row_was_pruned_stays_out_when_resumed(world):
+    # X11 (changed): hub U5 may prune rows, never sightings, so a pruned kept-out session
+    # resumed under the same session id is still kept out.
+    kept_out(world)
+    world.store._db.execute("DELETE FROM bindings WHERE session_id = 's-a'")
+    back = world.bind(claude(1500, "s-a"), source="resume")
+    assert back.binding.state == "unbound"
+    assert back.superseded == ()
+    assert world.resolve(B).state == "current"
+
+
+def test_a_kept_out_session_renamed_away_and_back_stays_out(world):
+    # A46 (rename back, G1, fixed): the sighting stays with N while the row points at M.
+    kept_out(world)
+    assert world.bind(A, launch=M, source="resume").binding.state == "current"
+    assert world.bind(A, source="resume").binding.state == "unbound"  # G2 under M
+    back = world.bind(A, source="resume")
+    assert (back.binding.name, back.binding.state) == (N, "unbound")
+    assert back.binding.reason == bindings.HELD_SINCE.format(name=N)
+    assert back.superseded == ()
+    assert world.resolve(B).state == "current"
+
+
+def _a_kept_out_never_holder(world):
+    """A session the unknown-nesting barrier left unbound (so it never held N and has no
+    origin), restored after a reboot once a session of the new boot holds N: kept out by
+    the earlier-boot rule (KC3). Returns its harness and session id."""
+    world.bind(A)
+    assert world.bind(codex_without_ps("t-s")).binding.state == "unbound"
+    world.boot = "boot-after"
+    world.alive.clear()
+    world.bind(claude(3003, "s-c"))
+    restored = world.bind(Caller("codex", 7007, "t-s", False, "walk", None), source="resume")
+    assert restored.binding.reason == bindings.HELD_SINCE.format(name=N)
+    return "codex", "t-s", claude(3003, "s-c")
+
+
+def _a_fork_of_n(world):
+    world.bind(A)
+    world.bind(claude(3003, "s-fork"), source="fork")
+    return "claude", "s-fork", A
+
+
+@pytest.mark.parametrize("setup", [_a_kept_out_never_holder, _a_fork_of_n])
+def test_a_fork_or_kept_out_session_seen_at_a_new_pid_with_startup_stays_out(world, setup):
+    # A41, A42 (startup escape, G2, fixed): a new pid with `startup` no longer escapes a
+    # sticky state of the boot (KC6).
+    harness, session, holder = setup(world)
+    again = world.bind(Caller(harness, 7500, session, False, "walk", None), source="startup")
+    assert again.binding.state == "unbound"
+    assert again.superseded == ()
+    assert world.resolve(holder).state == "current"
+
+
+def test_a_superseded_session_seen_at_a_new_pid_with_startup_stays_superseded(world):
+    # A43 (fixed).
+    world.bind(A)
+    world.bind(B)
+    again = world.bind(claude(1500, "s-a"), source="startup")
+    assert again.binding.state == "superseded"
+    assert again.superseded == ()
+    assert world.resolve(B).state == "current"
+
+
+def test_a_nested_session_seen_at_a_new_pid_with_startup_stays_nested(world):
+    # A44 (fixed): stays nested-unbound until it adopts, though no longer nested.
+    world.bind(A)
+    world.bind(nested_codex("t-nested"))
+    again = world.bind(Caller("codex", 8500, "t-nested", False, "walk", None), source="startup")
+    assert again.binding.state == "unbound"
+    assert again.superseded == ()
+    assert world.resolve(A).state == "current"
+
+
+def test_a_superseded_nonce_holder_seen_at_a_new_pid_stays_superseded(world):
+    # A118 (fixed): S stays superseded and sustains no lease.
+    world.claim(nonce="n1")
+    world.bind(A)
+    world.adopt(A, "n1")
+    world.bind(B)
+    world.adopt(B, "n1")  # B supersedes A
+    _live(world, "s-b")
+    assert world.bind(claude(1500, "s-a"), source="startup").binding.state == "superseded"
+    world.alive.discard(2002)
+    assert world.bind(claude(3003, "s-c")).binding.state == "current"
+
+
+def test_a_superseded_lease_holder_seen_at_a_new_pid_never_takes_back_the_name(world):
+    # N2 (fixed): the lease follows KC5, through its in-place successor.
+    _holder_with_a_live_lease(world)
+    heir = world.bind(claude(P, "s-t"), source="clear").binding
+    assert (heir.state, heir.nonce) == ("current", "n1")
+    assert world.bind(claude(1500, "s-a"), source="startup").binding.state == "superseded"
+    world.alive.discard(P)
+    assert world.bind(claude(1600, "s-a"), source="startup").binding.state == "superseded"
+    assert _record(world).holder == ("claude", "s-t")
+
+
+def test_an_earlier_boot_session_restored_with_no_name_stays_out_once_named(world):
+    # A121 (fixed): the nameless restore leaves its sighting of N at the earlier boot.
+    world.bind(A)
+    assert world.bind(codex_without_ps("t-s")).binding.state == "unbound"  # the barrier
+    world.boot = "boot-after"
+    world.alive.clear()
+    s = Caller("codex", 7007, "t-s", False, "walk", None)
+    assert world.bind(s, launch=NO_NAME, source="resume").binding.state == "unbound"
+    held = world.bind(claude(3003, "s-c")).binding
+    assert held.state == "current"
+    back = world.bind(s, source="resume")
+    assert back.binding.state == "unbound"
+    assert back.superseded == ()
+    assert world.resolve(claude(3003, "s-c")).state == "current"
+
+
+@pytest.mark.parametrize(
+    ("first", "source"),
+    [
+        (claude(3003, "s-f"), "fork"),
+        (Caller("claude", 3003, "s-f", True, "walk", None), "startup"),
+    ],
+    ids=["fork", "nested"],
+)
+def test_a_fork_or_nested_session_first_seen_with_no_name_stays_unbound_once_named(
+    world, first, source
+):
+    # A122 (fixed): `origins` records how the session started, even with no name yet.
+    world.bind(A)
+    world.bind(first, launch=NO_NAME, source=source)
+    later = world.bind(claude(3003, "s-f"), source="resume")  # no longer nested
+    assert later.binding.state == "unbound"
+    assert later.superseded == ()
+    assert world.resolve(A).state == "current"
+
+
+def _fork_in_q(world):
+    world.bind(claude(6006, "s-f"), source="fork")
+
+
+def _nested_in_q(world):
+    world.bind(Caller("claude", 6006, "s-f", True, "walk", None))
+
+
+@pytest.mark.parametrize("start", [_fork_in_q, _nested_in_q], ids=["fork", "nested"])
+@pytest.mark.parametrize("back", ["named", "nameless under the lease"])
+def test_a_superseded_fork_or_nested_session_never_comes_back_current_or_as_holder(
+    world, start, back
+):
+    # Review P2/P3 (rev 2026-11-22): origin is read on every row, a superseded one too, so
+    # KC6's first exception decides F again but never makes it current or N's holder.
+    c = claude(6006, "s-c")
+    if back != "named":
+        world.claim(nonce="n1")
+    start(world)
+    world.bind(c, source="clear")  # C supersedes F in Q (A30)
+    if back != "named":
+        world.adopt(c, "n1")
+        _live(world, "s-c")
+    launch = N if back == "named" else NO_NAME
+    found = world.bind(claude(6006, "s-f"), launch=launch, source="resume")
+    assert _record(world).holder == ("claude", "s-c")
+    assert found.binding.state == "unbound"
+    assert found.binding.reason in (bindings.FORK, bindings.NESTED)
+    assert [old.session_id for old in found.superseded] == ["s-c"]
+    if back != "named":
+        assert _record(world).lease_pid == 6006
+
+
+def test_sightings_only_move_forward_and_one_current_row_holds_the_name(world):
+    # I6, and I1 again over keep-out paths: a sighting's epoch never falls, a kept-out
+    # decision moves no sighting, and at most one current row of N is N's holder.
+    c = claude(3003, "s-c")
+    steps = [
+        lambda: world.claim(nonce="n1"),
+        lambda: world.bind(A),  # provisional
+        lambda: world.adopt(A, "n1"),  # current
+        lambda: world.bind(A, launch=RENAMED, source="resume"),  # G2
+        lambda: world.bind(c),  # provisional under n1
+        lambda: world.claim(nonce="n1", expires="2020-01-01T00:00:00.000Z"),
+        lambda: world.bind(c, source="resume"),  # current: A is out
+        lambda: world.bind(A, source="resume"),  # kept out
+        lambda: world.bind(A, launch=M, source="resume"),  # binds fresh under M
+        lambda: world.bind(A, source="resume"),  # G2 under M
+        lambda: world.bind(A, source="resume"),  # kept out of N again
+        lambda: world.store._db.execute("DELETE FROM bindings WHERE session_id = 's-a'"),
+        lambda: world.bind(claude(1500, "s-a"), source="resume"),  # still kept out
+        lambda: world.claim(nonce="n2"),
+        lambda: world.adopt(claude(1500, "s-a"), "n2"),  # the way back
+    ]
+
+    def seen():
+        found = world.store._db.execute("SELECT name, harness, session_id, epoch FROM sightings")
+        return {(name, harness, session): epoch for name, harness, session, epoch in found}
+
+    for act in steps:
+        before = seen()
+        done = act()
+        after = seen()
+        assert all((after[key] or 0) >= (epoch or 0) for key, epoch in before.items())  # I6
+        binding = getattr(done, "binding", None)
+        if binding is not None and binding.reason == bindings.HELD_SINCE.format(name=N):
+            assert after == before
+        current = [row for row in world.store.rows() if row.name == N and row.state == "current"]
+        assert len(current) <= 1
+        assert all(row.key == _record(world).holder for row in current)  # I1
+    assert world.resolve(claude(1500, "s-a")).state == "current"
+
+
+_SCHEMA_3 = (
+    """CREATE TABLE bindings (harness TEXT NOT NULL, session_id TEXT NOT NULL, name TEXT,
+    pid INTEGER, evidence TEXT NOT NULL, boot TEXT NOT NULL, generation INTEGER,
+    state TEXT NOT NULL, reason TEXT, bound_at REAL NOT NULL, last_seen REAL NOT NULL,
+    seen_holds INTEGER, PRIMARY KEY (harness, session_id))""",
+    """CREATE TABLE names (name TEXT PRIMARY KEY, declared INTEGER NOT NULL,
+    generation INTEGER NOT NULL, epoch INTEGER NOT NULL, held_boot TEXT, bound_seen REAL,
+    first_bound_at REAL NOT NULL, holder_harness TEXT, holder_session TEXT, nonce TEXT,
+    lease_pid INTEGER)""",
+    "INSERT INTO bindings VALUES ('claude', 's-a', 'ogham-worker', 1001, 'walk', 'boot-now',"
+    " 3, 'current', NULL, 0, 0, 1)",
+    "INSERT INTO names VALUES ('ogham-worker', 1, 3, 1, 'boot-now', 0, 0, 'claude', 's-a',"
+    " 'n1', NULL)",
+    "PRAGMA user_version=3",
+)
+
+
+def test_a_version_three_bindings_file_opens_as_version_four_with_every_table_recreated(
+    tmp_path,
+):
+    # KC7: U4's bump resets every bindings table of the version before.
+    path = tmp_path / "bindings.sqlite3"
+    with closing(sqlite3.connect(path)) as raw:
+        for statement in _SCHEMA_3:
+            raw.execute(statement)
+        raw.commit()
+    store = bindings.open_bindings(path)
+    try:
+        assert (store.rows(), store.names()) == ([], [])
+        tables = {
+            found
+            for (found,) in store._db.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        assert tables == {"bindings", "names", "sightings", "origins"}
+        assert "seen_holds" not in _columns(store._db, "bindings")
+        assert store._db.execute("PRAGMA user_version").fetchone() == (4,)
+    finally:
+        store.close()
+    assert bindings.SCHEMA_VERSION == 4
+
+
+def test_a_locked_bind_reads_each_claim_once(world):
+    # U3 follow-up: a bind decides on one read of the claim file per name.
+    _non_heir_resumes_into_p(world)
+    reads = []
+    context = world.context()
+    claim = context.claim
+
+    def counted(name):
+        reads.append(name)
+        return claim(name)
+
+    world.now += 1
+    world.store.bind(Event("resume", A, named(N)), replace(context, claim=counted))
+    assert sorted(set(reads)) == reads == [N]

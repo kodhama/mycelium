@@ -457,12 +457,16 @@ def test_the_directory_shows_the_live_then_the_latest_current_then_the_latest_bi
 
 def test_a_never_held_names_clock_keeps_its_first_bound_at_after_a_rename(world):
     # N1: the earliest row that carried the name, never current, renames away on day 8.
-    # The clock ran from the name's first_bound_at, so the name stays gone.
-    world.bind(claude(1001, "s-early"), launch="scratch-probe", source="fork")
+    # The clock ran from the name's first_bound_at, so the name stays gone. The early row
+    # is provisional, not a fork: since U4 a fork keeps its state, and its name, for the
+    # boot (KC6), so it can't rename away.
+    world.claim(name="scratch-probe", nonce="n1")
+    early = world.bind(claude(1001, "s-early"), launch="scratch-probe").binding
+    assert early.state == "provisional"
     world.now += 3 * DAY
     world.bind(claude(1002, "s-later"), launch="scratch-probe", source="fork")
     world.now += 5 * DAY
     assert table(world)["scratch-probe"].deliverability == "gone"
-    moved = world.bind(claude(1009, "s-early"), launch="other-probe", source="fork")
+    moved = world.bind(claude(1009, "s-early"), launch="other-probe", source="resume")
     assert moved.binding.name == "other-probe"
     assert table(world)["scratch-probe"].deliverability == "gone"
