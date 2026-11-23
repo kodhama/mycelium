@@ -2557,3 +2557,35 @@ def test_a_locked_bind_reads_each_claim_once(world):
     world.now += 1
     world.store.bind(Event("resume", A, named(N)), replace(context, claim=counted))
     assert sorted(set(reads)) == reads == [N]
+
+
+def _out_after_a_reboot(world):
+    """A held N before a reboot; C holds it in the new boot, in pid 3003."""
+    world.bind(A)
+    world.boot = "boot-after"
+    world.alive.clear()
+    world.bind(claude(3003, "s-c"))
+    return claude(3003, "s-c")
+
+
+def _out_and_renamed_back(world):
+    """A, kept out of N by B (pid 2002), moves to M and back: G2 under M, not sticky."""
+    kept_out(world)
+    world.bind(A, launch=M, source="resume")
+    world.bind(A, source="resume")
+    return B
+
+
+@pytest.mark.parametrize("setup", [_out_after_a_reboot, _out_and_renamed_back])
+def test_a_kept_out_session_resumed_into_the_holders_process_stays_out(world, setup):
+    # D1 (the lead's ruling, Option B): KC3 keep-out of N gates succession to N. Only a
+    # superseded row of this boot under KC6's first or third exception is exempt.
+    # One process runs one session, so the holder is still superseded there (A30), as a
+    # non-heir's start would; it stays N's holder, and nobody is current.
+    holder = setup(world)
+    back = world.bind(claude(holder.pid, "s-a"), source="resume")
+    assert back.binding.state == "unbound"
+    assert back.binding.reason == bindings.HELD_SINCE.format(name=N)
+    assert [old.session_id for old in back.superseded] == [holder.session_id]
+    assert _record(world).holder == (holder.harness, holder.session_id)
+    assert world.store.live_bindings(world.context()) == []

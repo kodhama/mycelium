@@ -3,9 +3,9 @@
 One row per (harness, session id), in an owner-only SQLite file in state
 (`bindings.sqlite3`), under the message store's file rules. The hook (U8 for
 Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
-`adopt`, `resolve_caller` (for `whoami`) and `authorize`; the directory reads
-`rows` and `names`, the one record per name that holds the name's own facts
-(U4c KC1). The rules are in docs/decisions/bindings.md. In short:
+`adopt`, `resolve_caller` (for `whoami`) and `authorize`, and `directory` reads
+`listing`: the rows and the name records (one per name, holding the name's own
+facts, U4c KC1) in one snapshot. The rules are in docs/decisions/bindings.md. In short:
 
 - **Idempotent on the key** (KTD4): a SessionStart that continues a session
   (its hook re-run in the same process, or its resume or compaction in any
@@ -25,7 +25,8 @@ Claude, U11 for Codex) calls `bind` at every SessionStart; the CLI calls
 - **Keep-out** (U4c KC3): each session's `sightings` of each name, which no
   rename or restart rewrites, keep it out of a name another session has held
   since it last held it or went provisional for it, or, after a reboot, since
-  the first holder of the new boot. Process succession is checked first.
+  the first holder of the new boot. It gates succession to that name, except
+  for a superseded session back by KC6's exceptions.
 - **Generations, per name**, rise when a binding becomes current by a fresh
   start, a `/clear` or a `/resume` onto another session in the same process,
   or an adoption. A resume or compaction of the same session keeps its own, and
@@ -642,9 +643,11 @@ class Bindings:
             raise RuntimeError(f"no name record for {found.name}")
         claim = context.claim(found.name)
         record = self._lapse(record, claim, context)
-        # Process succession comes before keep-out, so the /resume back works (KC4, A21).
-        succeeds = self._succession(record, row, caller, claim, context)
-        if not succeeds and self._kept_out(record, found.key, context.boot):
+        # Keep-out of the name gates succession to it (KC3, KC4). A superseded row of this
+        # boot is here only by KC6's exceptions, the /resume back (A21) or the holder
+        # back in lease_pid (F4), and is exempt.
+        exempt = row is not None and row.boot == context.boot and row.state == "superseded"
+        if not exempt and self._kept_out(record, found.key, context.boot):
             # Another session holds the name now, and with it any lease it adopted.
             return replace(found, reason=HELD_SINCE.format(name=found.name))
         self._sight(found.name, found.key, context.boot)
@@ -762,11 +765,10 @@ class Bindings:
         runs in the caller's process and still points at the name or at none, or when
         the holder is superseded and the caller runs in its `lease_pid` under KC5(b2).
         Forks and nested sessions never succeed (`_decide` reads their origin first),
-        nor does a row kept out of this name in this boot."""
+        nor does a session kept out of the name (`_for_name` checks KC3 first)."""
         if caller.pid is None or caller.nested:
             return False
-        sticky = (*_STAYS_UNBOUND, HELD_SINCE.format(name=record.name))
-        if row is not None and row.boot == context.boot and row.reason in sticky:
+        if row is not None and row.boot == context.boot and row.reason in _STAYS_UNBOUND:
             return False
         if holder.name not in (record.name, None):
             return False  # it renamed away: the name's lease lapsed (X6)
@@ -779,20 +781,6 @@ class Bindings:
             and holder.pid == caller.pid
             and holder.boot == context.boot
         )
-
-    def _succession(
-        self,
-        record: NameRecord,
-        row: Binding | None,
-        caller: Caller,
-        claim: lease.Claim,
-        context: Context,
-    ) -> bool:
-        """Whether the caller succeeds the name's holder, another session (KC4)."""
-        holder = self._holder(record)
-        if holder is None or holder.key == (caller.harness, caller.session_id):
-            return False
-        return self._succeeds(record, holder, row, caller, claim, context)
 
     def _succeed_nameless(
         self, found: Binding, own: Sequence[Binding], context: Context
