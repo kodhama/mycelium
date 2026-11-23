@@ -205,7 +205,8 @@ class NameRecord:
 
     name: str
     declared: bool
-    """Whether a cluster declared the name at the last SessionStart that carried it."""
+    """Whether a cluster declared the name at the last SessionStart that had it as its
+    launch name."""
     generation: int
     """The last generation issued; 0 until a binding is first current."""
     epoch: int
@@ -216,8 +217,8 @@ class NameRecord:
     """When a current binding of the name was last written; None if none ever was.
     An undeclared name's 7-day clock runs from it (R37; lead ruling, GRO-50)."""
     first_bound_at: float
-    """When the record was made: the first SessionStart that carried the name. The
-    clock of a name nobody ever held runs from it."""
+    """When the record was made: the first SessionStart decided with the name as its
+    launch name. The clock of a name nobody ever held runs from it."""
     holder: tuple[str, str] | None = None
     """(harness, session id) of the session that last became current for the name, or
     succeeded its holder with no launch name under its lease (KC4); None if none has."""
@@ -623,7 +624,7 @@ class Bindings:
         elif name is None:
             found = replace(found, reason=event.launch.reason)
             if caller.pid is not None:
-                found = self._succeed_nameless(found, own, context)
+                found = self._succeed_nameless(found, row, caller, own, context)
         else:
             found = self._for_name(found, row, caller, context)
         if found.state == "current":
@@ -643,10 +644,8 @@ class Bindings:
             raise RuntimeError(f"no name record for {found.name}")
         claim = context.claim(found.name)
         record = self._lapse(record, claim, context)
-        # Keep-out of the name gates succession to it (KC3, KC4). A superseded row of this
-        # boot is here only by KC6's exceptions, the /resume back (A21) or the holder
-        # back in lease_pid (F4), and is exempt.
-        exempt = row is not None and row.boot == context.boot and row.state == "superseded"
+        # Keep-out of the name gates succession to it (KC3, KC4), except A21's /resume back.
+        exempt = _resumes_back(row, found.name, caller, context)
         if not exempt and self._kept_out(record, found.key, context.boot):
             # Another session holds the name now, and with it any lease it adopted.
             return replace(found, reason=HELD_SINCE.format(name=found.name))
@@ -783,21 +782,28 @@ class Bindings:
         )
 
     def _succeed_nameless(
-        self, found: Binding, own: Sequence[Binding], context: Context
+        self,
+        found: Binding,
+        row: Binding | None,
+        caller: Caller,
+        own: Sequence[Binding],
+        context: Context,
     ) -> Binding:
         """KC4 with no launch name: under a lease in force whose nonce is the name's, the
         caller becomes the holder of the name its process's holder held, unbound and
         nameless, so the lease stays in force through it (limit F3). With no such lease
         nothing passes. A session still bound to another name, or kept out of this one
-        whatever its row points at (KC3), never succeeds: it supersedes the holder as a
-        non-heir (F4). A fork or nested session never gets here (`_decide`)."""
+        whatever its row points at (KC3), never succeeds, unless it is A21's /resume back:
+        it supersedes the holder as a non-heir (F4). A fork or nested session never gets
+        here (`_decide`)."""
         for other in own:
             for record in self._held_by(other.key):
                 if other.name not in (record.name, None):
                     continue
                 if found.name not in (None, record.name):
                     continue
-                if self._kept_out(record, found.key, context.boot):
+                exempt = _resumes_back(row, record.name, caller, context)
+                if not exempt and self._kept_out(record, found.key, context.boot):
                     continue
                 claim = context.claim(record.name)
                 if claim.nonce != record.nonce or not self._in_force(record, claim, None, context):
@@ -1051,6 +1057,20 @@ class Bindings:
         if done.rowcount != 1:
             raise RuntimeError(f"no name record for {name}")
         return self._name(name).generation
+
+
+def _resumes_back(row: Binding | None, name: str, caller: Caller, context: Context) -> bool:
+    """A21's /resume back: a superseded row of this boot, resumed into its own process
+    under its own name. KC3 keep-out never stops it from succeeding there; a superseded
+    session resumed into another process, or under another name, gets no such pass."""
+    return (
+        row is not None
+        and row.boot == context.boot
+        and row.state == "superseded"
+        and row.name == name
+        and caller.pid is not None
+        and row.pid == caller.pid
+    )
 
 
 def _carries(claim: lease.Claim, boot: str | None, nonce: str | None) -> bool:

@@ -1254,6 +1254,8 @@ def test_after_a_reboot_no_name_fork_and_nested_rules_still_apply(world, caller,
     assert found.binding.state == "unbound"
     assert found.superseded == ()
     assert _record(world).holder == ("claude", "s-a")  # nobody holds N in the new boot
+    if origin is None:  # s-a was first decided as neither: no lasting mark
+        assert _origin(world, caller.session_id, caller.harness) is None
     if origin is not None:
         assert _origin(world, caller.session_id, caller.harness) == origin
         world.claim(nonce="n1", boot="boot-after")
@@ -1744,6 +1746,7 @@ def test_the_directory_reads_rows_and_records_in_one_snapshot(world, monkeypatch
         other.close()
     assert [row.name for row in found] == ["scratch-probe"]
     assert [record.name for record in records] == ["scratch-probe"]
+    assert "late-probe" in names(world)  # the bind in between did commit (T2)
 
 
 # U4c U3: holder, nonce and lease on the name record (plan U3, KC4, KC5, KC6's third
@@ -2589,3 +2592,73 @@ def test_a_kept_out_session_resumed_into_the_holders_process_stays_out(world, se
     assert [old.session_id for old in back.superseded] == [holder.session_id]
     assert _record(world).holder == (holder.harness, holder.session_id)
     assert world.store.live_bindings(world.context()) == []
+
+
+# Review round on 6595417: KC3's exemption is only A21's /resume back, a superseded row
+# of this boot back in its own process under its own name.
+
+
+def test_a_superseded_session_resumed_back_under_another_name_it_is_kept_out_of_stays_out(world):
+    # F2: S is kept out of M (U took it while S was G2-unbound), then holds N; C clears
+    # in S's process; S resumed there named M is not A21's resume back to its own name.
+    s, u = claude(1001, "s-s"), claude(5005, "s-u")
+    world.bind(s, launch=M)
+    away = Launch(None, "launch names disagree", {"pane": SCRATCH}, "named")
+    assert world.bind(s, launch=away, source="resume").binding.state == "unbound"  # G2
+    world.bind(u, launch=M)
+    assert world.bind(s, source="resume").binding.state == "current"  # under N
+    world.bind(claude(1001, "s-c"), source="clear")  # S superseded
+    back = world.bind(s, launch=M, source="resume").binding
+    assert (back.state, back.reason) == ("unbound", bindings.HELD_SINCE.format(name=M))
+    assert world.resolve(u).state == "current"
+    assert _record(world, M).holder == ("claude", "s-u")
+
+
+def test_a_kept_out_session_superseded_elsewhere_never_takes_the_holders_lease(world):
+    # F1: s1, kept out after a reboot and then superseded in its own process, is resumed
+    # into the holder's process: it stays out, and the lease stays the holder's (KC5(b2)).
+    s1, h = claude(1001, "s1"), claude(2002, "h")
+    world.bind(s1)
+    world.boot = "boot-after"
+    world.alive.clear()
+    world.claim(nonce="n1", boot="boot-after")
+    world.bind(h)
+    world.adopt(h, "n1")
+    world.claim(
+        nonce="n1", boot="boot-after", state="live", expires=None, pane="w1:p1", session="h"
+    )
+    out = world.bind(s1, source="resume").binding
+    assert out.reason == bindings.HELD_SINCE.format(name=N)
+    world.bind(claude(1001, "s5"), launch=M, source="clear")  # s1 superseded
+    into = world.bind(claude(2002, "s1"), source="resume").binding
+    assert into.state != "current"
+    assert into.nonce is None
+    assert _record(world).holder == ("claude", "h")
+    assert _record(world).lease_pid == 2002
+
+
+def test_a_session_an_outsider_superseded_resumed_into_its_process_stays_out(world):
+    # F3: B took N from A by newest-wins; A resumed into B's process is kept out (KC3),
+    # and supersedes B there, as one process runs one session (A30): nobody is current.
+    world.bind(A)
+    world.bind(B)
+    back = world.bind(claude(2002, "s-a"), source="resume")
+    assert (back.binding.state, back.binding.reason) == (
+        "unbound",
+        bindings.HELD_SINCE.format(name=N),
+    )
+    assert [old.session_id for old in back.superseded] == ["s-b"]
+    assert _record(world).holder == ("claude", "s-b")
+    assert world.store.live_bindings(world.context()) == []
+
+
+def test_a_superseded_holder_resumed_back_nameless_in_its_process_succeeds_its_heir(world):
+    # P2: A's named /clear made T current with n1; A's /resume back in P with no launch
+    # name is the resume back to its own name, so it succeeds T as N's nameless holder,
+    # and its next named start there is current with n1.
+    _holder_with_a_live_lease(world)
+    assert world.bind(claude(P, "s-t"), source="clear").binding.nonce == "n1"
+    world.bind(A, launch=NO_NAME, source="resume")
+    assert _record(world).holder == ("claude", "s-a")
+    named = world.bind(A, source="resume").binding
+    assert (named.state, named.nonce) == ("current", "n1")
