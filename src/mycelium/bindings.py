@@ -526,7 +526,10 @@ class Bindings:
             # Kept out stays out in this boot, unless a new herdr name binds it fresh.
             return event.launch.name in (None, row.name)
         if row.state == "unbound" and row.reason in _STAYS_UNBOUND:
-            return True
+            # A fork or nested row first seen with no name is decided again once it
+            # carries one: its origin keeps it unbound, and the name it now has is
+            # recorded, so it can still adopt (A122).
+            return row.name is not None or event.launch.name is None
         if row.state == "superseded":
             if self._held_in_process(row, caller, context):
                 return False

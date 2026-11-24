@@ -796,7 +796,9 @@ source, and keeps a fork or nested origin across a reboot.
   so a fork superseded in its own process and resumed back stays unbound and
   never becomes the name's holder. A fork or nested decision is now unbound
   with the fork or nested reason even with no launch name, so a fork first
-  seen with no name stays unbound once named. A session first decided as
+  seen with no name stays unbound once named. That named start records the
+  name on its row, with its sighting and `declared`, so `adopt` stays open
+  to it (Codex review, PR #8). A session first decided as
   neither gets no row: one restored nested later stays nested-unbound for
   the rest of the boot (its reason is the nested one, which is sticky), but
   leaves no mark past a reboot.

@@ -2428,8 +2428,15 @@ def test_a_fork_or_nested_session_first_seen_with_no_name_stays_unbound_once_nam
     world.bind(first, launch=NO_NAME, source=source)
     later = world.bind(claude(3003, "s-f"), source="resume")  # no longer nested
     assert later.binding.state == "unbound"
+    assert later.binding.reason in (bindings.FORK, bindings.NESTED)
     assert later.superseded == ()
     assert world.resolve(A).state == "current"
+    # The name it now carries is recorded, so adopt, the documented return, stays open.
+    assert later.binding.name == "ogham-worker"
+    world.claim(nonce="n1")
+    world.adopt(claude(3003, "s-f"), "n1")
+    assert world.resolve(claude(3003, "s-f")).state == "current"
+    assert _record(world).holder == ("claude", "s-f")
 
 
 def _fork_in_q(world):
