@@ -2439,6 +2439,26 @@ def test_a_fork_or_nested_session_first_seen_with_no_name_stays_unbound_once_nam
     assert _record(world).holder == ("claude", "s-f")
 
 
+@pytest.mark.parametrize(
+    "pids", [(3003, 3003, 3003), (3003, 3004, 3005)], ids=["same pid", "new pids"]
+)
+def test_a_session_restored_nested_after_a_nameless_start_stays_nested_once_named(world, pids):
+    # Re-check P1 on the A122 fix: a session first decided as neither has no `origins`
+    # row, so once restored nested its sticky nested reason alone keeps it unbound,
+    # named or not (KC6).
+    world.bind(A)
+    world.bind(claude(pids[0], "s-f"), launch=NO_NAME)
+    nested = Caller("claude", pids[1], "s-f", True, "walk", None)
+    assert world.bind(nested, launch=NO_NAME, source="resume").binding.reason == bindings.NESTED
+    source = "resume" if len(set(pids)) == 1 else "startup"
+    later = world.bind(claude(pids[2], "s-f"), source=source)  # named, no longer nested
+    assert later.binding.state == "unbound"
+    assert later.binding.reason == bindings.NESTED
+    assert later.superseded == ()
+    assert world.resolve(A).state == "current"
+    assert _record(world).holder == ("claude", "s-a")
+
+
 def _fork_in_q(world):
     world.bind(claude(6006, "s-f"), source="fork")
 
