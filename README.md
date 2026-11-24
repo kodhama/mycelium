@@ -194,7 +194,7 @@ it isn't.** The harness hooks bind it at every SessionStart. The rules are in
   session of their own process. Resumed into the holder's own process, a
   session kept out of the name still stays out of it, though it supersedes
   the holder there, since one process runs one session. One known limit,
-  older than this release: if the holder is resumed into such a session's
+  older than this work (it was already at fd75a6d): if the holder is resumed into such a session's
   process, a `/resume` back to that session there takes the name, with the
   lease if one is in force (the record has the path; follow-up: GRO-82).
 - **A session decided again with no launch name keeps its old name**, as

@@ -773,9 +773,10 @@ source, and keeps a fork or nested origin across a reboot.
   process, the holder's included, and when resumed back under a name other
   than its own; a superseded one too. In the holder's process it still
   supersedes the holder, as any non-heir does (A30), and nobody is current.
-  This changes one outcome from before this slice: a session an outsider
+  This changes two outcomes from before this slice: a session an outsider
   took the name from, resumed into the outsider's process, was current at
-  the next generation, and is now kept out. Keep-out is per name: a session
+  the next generation, and is now kept out; and a `/resume` back after a
+  detour to another process is now kept out (N2 below). Keep-out is per name: a session
   kept out of one name still succeeds the holder of another in that
   holder's process. A fork or nested session never succeeds.
 - **Sticky states hold for the boot.** A row of this boot that is
@@ -799,8 +800,9 @@ source, and keeps a fork or nested origin across a reboot.
   seen with no name stays unbound once named. That named start records the
   name on its row, with its sighting and `declared`, so `adopt` stays open
   to it (Codex review, PR #8). A session first decided as
-  neither gets no row: one restored nested later stays nested-unbound for
-  the rest of the boot (its reason is the nested one, which is sticky), but
+  neither gets no row: one decided again while nested later stays
+  nested-unbound for the rest of the boot (a current session resumed
+  nested continues as current) (its reason is the nested one, which is sticky), but
   leaves no mark past a reboot.
 - **A50 and F2 ruled** (PM ruling, GRO-73 d62c86fe). A session's origin is a
   fact about how that session id started, so a fork restored after a reboot,
