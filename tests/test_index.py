@@ -839,3 +839,18 @@ def test_damaged_published_names_are_reported_on_a_cache_hit(tree):
     (found.paths.state / "index" / "published.json").write_text('{"format": 1, "names": []}')
     with pytest.raises(IndexUnavailable, match="published.json"):
         refresh(found.paths, read=found.read)
+
+
+def test_a_missing_published_list_with_snapshots_reports_no_snapshot_name_as_added(tree):
+    # B16, ruled in U4c (docs/decisions/org-index.md): with published.json missing, the
+    # last-good snapshots stand in for it, so names in unchanged snapshots are not added.
+    found = tree("org")
+    first = refresh(found.paths, read=found.read)
+    assert any((found.paths.state / "index" / "last-good").iterdir())
+    (found.paths.state / "index" / "published.json").unlink()
+    found.edit("hq/mq/repos/engine", 'run = "running"', 'run = "parked"')
+    again = refresh(found.paths, read=found.read)
+    assert again.rebuilt
+    assert [change for change in again.changes if change.kind == "added"] == []
+    assert set(again.index.names()) == set(first.index.names())
+    assert (found.paths.state / "index" / "published.json").exists()

@@ -149,3 +149,19 @@ lead's second review asked.**
   (`known = false`): stale, it may simply not know it (R23).
 - **The published names are checked on a cache hit too**, as hold records
   are, so a damaged file is reported whether or not the index is rebuilt.
+
+**2026-11-23 ruling: a missing published list (B16; U4c U4, GRO-81).**
+Hub plan `areas/agent-comms/plans/2026-11-15-u4c-name-records.md` at
+`980a81c` rules matrix row B16, which the scenario matrix left undefined.
+
+- **When `published.json` is missing while last-good snapshots exist, the
+  snapshots stand in for it**, so a name in an unchanged snapshot is not
+  reported as added. This is the code's own rule, now the contract:
+  "Snapshots stand in only where no published names were written yet"
+  (`_rebuild` in `src/mycelium/index.py`), and the reader returns `None`
+  before any list was written.
+- **A missing file is not a damaged one**, so the 2026-11-01 rule that "a
+  damaged file is reported, not read as empty" doesn't apply to it.
+- Pinned by
+  `test_a_missing_published_list_with_snapshots_reports_no_snapshot_name_as_added`
+  (`tests/test_index.py`).
